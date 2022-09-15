@@ -48,7 +48,7 @@ def normal_log_density(x, mean, log_std, std):
 def multinomials_log_density(actions, log_probs):
     log_prob = 0
     for i in range(len(log_probs)):
-        log_prob += log_probs[i].gather(1, actions[:, i].long().unsqueeze(1))
+        log_prob += log_probs[i, actions[i]]
     return log_prob
 
 

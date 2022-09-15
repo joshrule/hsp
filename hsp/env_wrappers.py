@@ -1,8 +1,12 @@
 import time
 import numpy as np
 import torch
+from gym.spaces.utils import flatdim
 from mazebase.torch_featurizers import GridFeaturizer
 from utils import merge_stat
+
+def torchify_obs(obs):
+    return torch.from_numpy(obs).view(1, -1)
 
 class EnvWrapper(object):
     def __init__(self, env):
@@ -90,40 +94,56 @@ class EnvWrapper(object):
         else:
             return defaul_val
 
-class RLLabWrapper(EnvWrapper):
+class GymWrapper(EnvWrapper):
     def __init__(self, env):
-        super(RLLabWrapper, self).__init__(env)
+        super(GymWrapper, self).__init__(env)
+        self.obs = None
 
     @property
     def observation_dim(self):
-        return self.env.observation_space.shape[0]
+        return flatdim(self.env.observation_space)
 
     @property
     def num_actions(self):
-        return 0 # contineous action
+        # Assuming discrete actions
+        return self.env.action_space.n
 
     @property
     def dim_actions(self):
-        return self.env.action_space.shape[0]
+        # Assuming discrete actions
+        return 1
+
+    @property
+    def is_continuous(self):
+        # Assuming discrete actions
+        return False
 
     def reset(self):
-        obs = self.env.reset()
-        obs = torch.from_numpy(obs).view(1, -1)
-        return obs
+        self.obs = super(GymWrapper, self).reset()
+        return self.get_current_obs()
 
     def step(self, action):
-        obs, reward, done, info = self.env.step(action)
-        obs = torch.from_numpy(obs).view(1, -1)
-        return obs, reward, done, info
+        self.obs, reward, term, trunc, info = super(GymWrapper, self).step(action)
+        return self.get_current_obs(), reward, term | trunc, info
 
-    def display(self):
-        if hasattr(self.env, 'render'):
-            self.env.render()
+    def display (self):
+        self.render()
+
+    def render(self):
+        self.env.render()
 
     def get_current_obs(self):
-        obs = self.env.get_current_obs()
-        obs = torch.from_numpy(obs).view(1, -1)
-        return obs
+        return torchify_obs(self.obs)
+
+    def get_state(self):
+        return self.get_current_obs()
+
+    def set_state(self, state):
+        self.env.unwrapped.state = state.numpy()[0]
+        self.env.renderer.reset()
+        self.env.renderer.render_step()
+        self.obs = state.numpy()
+        return self.get_current_obs()
 
 
 class MazeBaseWrapper(EnvWrapper):

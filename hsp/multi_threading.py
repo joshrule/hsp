@@ -32,7 +32,7 @@ class ThreadedTrainer(object):
         self.comms = []
         self.trainer = trainer_maker()
         # itself will do the same job as workers
-        self.nworkers = args.nthreads - 1
+        self.nworkers = args.num_threads - 1
         for i in range(self.nworkers):
             comm, comm_remote = mp.Pipe()
             self.comms.append(comm)
@@ -44,6 +44,9 @@ class ThreadedTrainer(object):
     def quit(self):
         for comm in self.comms:
             comm.send('quit')
+
+    def get_episode(self):
+        return self.trainer.get_episode()
 
     def obtain_grad_pointers(self):
         # only need perform this once

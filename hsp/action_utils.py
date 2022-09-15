@@ -2,14 +2,17 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 
-def parse_action_args(args):
-    if args.num_actions > 0:
+def parse_env_args(args, env):
+    args.input_dim = env.observation_dim
+    if env.num_actions > 0:
         # environment takes discrete action
-        args.continuous = False
-        assert args.dim_actions == 1
-        args.naction_heads = [args.num_actions]
+        args.continuous = env.is_continuous
+        assert env.dim_actions == 1
+        args.num_actions = env.num_actions
+        args.naction_heads = [env.num_actions]
     else:
-        # environment takes contineous action
+        raise Exception("Not updated. Don't run me.")
+        # environment takes continuous action
         actions_heads = args.nactions.split(':')
         if len(actions_heads) == 1 and int(actions_heads[0]) == 1:
             args.continuous = True
@@ -22,13 +25,6 @@ def parse_action_args(args):
         else:
             raise RuntimeError("--nactions wrong format!")
 
-    if args.sp_extra_action:
-        # add an extra action for self-play
-        if args.continuous:
-            args.dim_actions += 1
-        else:
-            args.naction_heads.append(2)
-
 def select_action(args, action_out):
     if args.continuous:
         action_mean, _, action_std = action_out
@@ -36,17 +32,21 @@ def select_action(args, action_out):
         return action.detach()
     else:
         log_p_a = action_out
-        p_a = [x.exp() for x in log_p_a]
-        return [torch.multinomial(p, 1).detach() for p in p_a]
+        # print(f"log_p_a: {log_p_a}")
+        p_a = log_p_a.exp()
+        # print(f"p_a: {p_a}")
+        return torch.multinomial(p_a, 1).detach()
 
 def translate_action(args, env, action):
     if args.num_actions > 0:
         # environment takes discrete action
-        action = [x.squeeze().data[0] for x in action]
+        # print(f"action: {action}")
+        action = action.item()
         actual = action
+        # print(f"actual: {actual}")
         return action, actual
-    else:
-        if args.continuous:
+    elif args.continuous:
+        # environment takes continuous action
             action = action.data[0].numpy()
             cp_action = action.copy()
             # clip and scale action to correct range
@@ -60,14 +60,15 @@ def translate_action(args, env, action):
                     cp_action[i] = max(-1.0, min(cp_action[i], 1.0))
                     cp_action[i] = 0.5 * (cp_action[i] + 1.0) * (high - low) + low
             return action, cp_action
-        else:
-            actual = np.zeros(len(action))
-            for i in range(len(action)):
-                if args.sp and i == len(action) - 1:
-                    actual[-1] = action[-1].squeeze().data[0]
-                else:
-                    low = env.action_space.low[i]
-                    high = env.action_space.high[i]
-                    actual[i] = action[i].data.squeeze()[0] * (high - low) / (args.naction_heads[i] - 1) + low
-            action = [x.squeeze().data[0] for x in action]
-            return action, actual
+    else:
+        # ???
+        actual = np.zeros(len(action))
+        for i in range(len(action)):
+            if args.sp and i == len(action) - 1:
+                actual[-1] = action[-1].squeeze().data[0]
+            else:
+                low = env.action_space.low[i]
+                high = env.action_space.high[i]
+                actual[i] = action[i].data.squeeze()[0] * (high - low) / (args.naction_heads[i] - 1) + low
+        action = [x.squeeze().data[0] for x in action]
+        return action, actual

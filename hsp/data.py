@@ -12,14 +12,17 @@ def init(env_name, args):
         from rllab_env.ant_gather_env import AntGatherEnv
         env = RLLabWrapper(AntGatherEnv(args))
     elif env_name == 'HalfCheetah':
-        from rllab.envs.mujoco.half_cheetah_env import HalfCheetahEnv
+        from garage.envs.mujoco.half_cheetah_env import HalfCheetahEnv
         env = RLLabWrapper(HalfCheetahEnv())
     elif env_name == 'MountainCar':
-        from rllab.envs.box2d.mountain_car_env import MountainCarEnv
+        from garage.envs.box2d.mountain_car_env import MountainCarEnv
         env = RLLabWrapper(MountainCarEnv())
-    elif env_name == 'Cartpole':
-        from rllab.envs.box2d.cartpole_env import CartpoleEnv
-        env = RLLabWrapper(CartpoleEnv())
+    elif env_name == 'cartpole':
+        #from garage.envs.box2d.cartpole_env import CartpoleEnv
+        #from garage.envs import GymEnv
+        #env = RLLabWrapper(GymEnv('CartPole-v1'))
+        import gym
+        env = GymWrapper(gym.make('CartPole-v1'))
     elif env_name == 'SingleGoal':
         from mazebase import single_goal
         from mazebase_env import single_goal as config

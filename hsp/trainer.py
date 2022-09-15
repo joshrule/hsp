@@ -13,7 +13,6 @@ from action_utils import *
 Transition = namedtuple('Transition', ('state', 'action', 'action_out', 'value', 'mask', 'next_state',
                                        'reward', 'misc'))
 
-
 class Trainer(object):
     def __init__(self, args, policy_net, env):
         self.args = args
@@ -21,277 +20,50 @@ class Trainer(object):
         self.env = env
         self.display = False
         self.params = [p for p in policy_net.parameters() if p.requires_grad]
-        if self.args.charlie_finetune > 0:
-            if self.args.sp:
-                self.params.extend([p for p in env.env.goal_policy.parameters() if p.requires_grad])
-            else:
-                self.params.extend([p for p in env.goal_policy.parameters() if p.requires_grad])
-        self.optimizer = optim.RMSprop(self.params,
-            lr = args.lrate, alpha=0.97, eps=1e-6)
+        self.optimizer = optim.RMSprop(self.params, lr = args.lrate, alpha=0.97, eps=1e-6)
 
-    def get_episode(self):
-        episode = []
-        state = self.env.reset()
-        self.env.attr['display_mode'] = self.display
-        if self.display:
-            if self.args.plot:
-                self.env.attr['vis'] = self.vis
-            self.env.display()
-        stat = dict()
-        switch_t = -1
-        prev_hid = Variable(torch.zeros(1, self.args.hid_size), requires_grad=False)
-        for t in range(self.args.max_steps):
-            misc = dict()
-            if self.args.recurrent:
-                action_out, value, next_hid = self.policy_net([Variable(state, requires_grad=False), prev_hid])
-                prev_hid = next_hid
-            elif self.args.sp:
-                action_out, value, _, _ = self.policy_net(Variable(state, volatile=True))
-            else:
-                # do forward again in compute_grad for speed-up
-                action_out, value = self.policy_net(Variable(state, volatile=True))
-            action = select_action(self.args, action_out)
-            action, actual = translate_action(self.args, self.env, action)
-            if self.args.hand_control and self.display:
-                self.hand_control(actual)
-            if self.args.sp:
-                misc['mind'] = self.env.current_mind
-            next_state, reward, done, info = self.env.step(actual)
-            stat['reward'] = stat.get('reward', 0) + reward
-            misc.update(info)
-            done = done or t == self.args.max_steps - 1
-            mask = 0 if done else 1
-            misc['episode_break'] = 0 if done else 1
+    def run_policy(self, state):
+        raise NotImplementedError
 
-            if self.args.sp and info.get('sp_switched'):
-                switch_t = t
-                mask = 0 # disconnect episode here
-            if self.args.sp and (not self.args.sp_asym) and t == switch_t + 1 > 0:
-                stat['target_emb_snapshot'] = {'merge_op': 'concat' ,
-                    'data': self.policy_net.bob.target_enc.target_emb_snapshot.clone()}
+    def _compute_misc(self, info):
+        return info
 
-            if self.args.sp and self.args.sp_persist > 0:
-                misc['sp_persist_count'] = self.env.persist_count
+    def _compute_mask(self, done, info):
+        return 0 if done else 1
 
-            if self.display:
-                if self.args.sp:
-                    print('t={}\treward={}\tmind={}'.format(t, reward, self.env.current_mind))
-                else:
-                    print('t={}\treward={}'.format(t, reward))
-                self.env.display()
-
-            episode.append(Transition(state, np.array([action]), action_out, value, mask, next_state, reward, misc))
-            state = next_state
-            if done:
-                break
-        stat['num_steps'] = t + 1
-        if hasattr(self.env, 'reward_terminal'):
-            episode[-1] = episode[-1]._replace(reward = episode[-1].reward + self.env.reward_terminal())
-            stat['reward'] = stat.get('reward', 0) + self.env.reward_terminal()
-
-        if self.args.sp and not self.env.test_mode:
-            episode[switch_t] = episode[switch_t]._replace(
-                reward=episode[switch_t].reward + self.env.reward_terminal_mind(1))
-            if switch_t > -1:
-                episode[-1] = episode[-1]._replace(
-                    reward=episode[-1].reward + self.env.reward_terminal_mind(2))
-            stat['reward'] = 0
-
-        if hasattr(self.env, 'get_stat'):
-            merge_stat(self.env.get_stat(), stat)
-
-        if self.display:
-            print('total reward={}'.format(stat['reward']))
-            if self.args.sp and not self.env.test_mode:
-                print('alice reward={}\tbob reward={}'.format(stat['reward_alice'], stat['reward_bob']))
-
-        return (episode, stat)
-
-    def compute_grad(self, batch):
-        stat = dict()
-        rewards = torch.Tensor(batch.reward)
-        masks = torch.Tensor(batch.mask)
-        actions = torch.from_numpy(np.concatenate(batch.action, 0))
-        returns = torch.Tensor(actions.size(0),1)
-        advantages = torch.Tensor(actions.size(0),1)
-
-        if self.args.sp:
-            minds = [d['mind'] for d in batch.misc]
-            if self.args.sp_persist > 0:
-                persist_count = [d['sp_persist_count'] for d in batch.misc]
-
+    def _compute_returns(self, returns, rewards, masks, batch):
         prev_return = 0
-        prev_alice_return = 0
-        prev_bob_return = 0
-        rewards = self.args.reward_scale * rewards
         for i in reversed(range(rewards.size(0))):
             returns[i] = rewards[i] + self.args.gamma * prev_return * masks[i]
-            if self.args.sp and self.args.sp_persist > 0:
-                if minds[i] == 1:
-                    # Add Alice's return from the previous episode, but only inside persist episodes.
-                    if masks[i] == 0: # At Alice's last step in an episode.
-                        returns[i] += self.args.sp_persist_discount * prev_alice_return
-                    if persist_count[i] > 0:
-                        prev_alice_return = returns[i, 0]
-                    else:
-                        prev_alice_return = 0
-
-                if minds[i] == 2 and self.args.sp_persist_separate:
-                    # do the same with Bob
-                    if masks[i] == 0:
-                        returns[i] += self.args.sp_persist_discount * prev_bob_return
-                    if persist_count[i] > 0:
-                        prev_bob_return = returns[i, 0]
-                    else:
-                        prev_bob_return = 0
-
             prev_return = returns[i, 0]
+        return returns
 
-        if self.args.recurrent:
-            # can't do batch forward.
-            values = torch.cat(batch.value, dim=0)
-            action_out = list(zip(*batch.action_out))
-            action_out = [torch.cat(a, dim=0) for a in action_out]
-        else:
-            # forward again in batch for speed-up
-            states = Variable(torch.cat(batch.state, dim=0), requires_grad=False)
-            if self.args.sp:
-                action_out, values, goal_vectors, enc_vectors = self.policy_net(states)
-            else:
-                action_out, values = self.policy_net(states)
+    def _postprocess_episode(self, episode):
+        return episode
 
-        for i in reversed(range(rewards.size(0))):
-            advantages[i] = returns[i] - values.data[i]
+    def serialize_step(self, t, reward, done, stat):
+        return f't={t}\treward={reward}'
 
-        if self.args.normalize_rewards:
-            advantages = (advantages - advantages.mean()) / advantages.std()
-
-        if self.args.continuous:
-            action_means, action_log_stds, action_stds = action_out
-            log_prob = normal_log_density(Variable(actions, requires_grad=False), action_means, action_log_stds, action_stds)
-            stat['action_std'] = action_stds.mean(dim=1, keepdim=False).sum().data[0]
-        else:
-            log_p_a = action_out
-            log_prob = multinomials_log_density(Variable(actions, requires_grad=False), log_p_a)
-        action_loss = -Variable(advantages, requires_grad=False) * log_prob
-        action_loss = action_loss.sum()
-        stat['action_loss'] = action_loss.data[0]
-
-        # value loss term
-        targets = Variable(returns, requires_grad=False)
-        value_loss = (values - targets).pow(2).sum()
-        stat['value_loss'] = value_loss.data[0]
-        loss = action_loss + self.args.value_coeff * value_loss
-
-        if not self.args.continuous:
-            # entropy regularization term
-            entropy = 0
-            for i in range(len(log_p_a)):
-                entropy -= (log_p_a[i] * log_p_a[i].exp()).sum()
-            stat['entropy'] = entropy.data[0]
-            if self.args.entr > 0:
-                loss -= self.args.entr * entropy
-
-        if self.args.sp_alice_entr > 0:
-            assert not self.args.continuous
-            # entropy regularization term
-            alice_entropy = 0
-            alice_inds = (torch.Tensor(minds) == 1).view(-1, 1)
-            if alice_inds.sum() > 0:
-                for i in range(len(log_p_a)):
-                    alice_log_p = log_p_a[i][alice_inds.expand_as(log_p_a[i])]
-                    alice_log_p = alice_log_p.view(alice_inds.sum(), log_p_a[i].shape[1])
-                    alice_entropy -= (alice_log_p * alice_log_p.exp()).sum()
-                stat['alice_entropy'] = alice_entropy.data[0]
-                loss -= self.args.sp_alice_entr * alice_entropy
-
-        if self.args.sp and self.args.sp_imitate > 0:
-            t = 0
-            alice_sta_t = -1
-            alice_end_t = -1
-            train_obs = []
-            train_actions = []
-            while t < states.size()[0]:
-                mind = states.data[t, -1]
-                if mind == 1 and alice_sta_t < 0:
-                        alice_sta_t = t
-                elif mind == 2 and alice_sta_t >= 0 and alice_end_t < 0:
-                    alice_end_t = t
-                    bob_obs = states[t:t+1].data
-                    alice_obs = states[alice_sta_t:alice_end_t].data.clone()
-                    # augment Alice's obs so it would have correct target
-                    alice_obs[:, self.args.obs_dim:] = bob_obs[:, self.args.obs_dim:].expand_as(alice_obs[:, self.args.obs_dim:])
-                    train_obs.append(alice_obs)
-                    train_actions.append(actions[alice_sta_t:alice_end_t])
-                    alice_sta_t = -1
-                    alice_end_t = -1
-                t += 1
-            train_obs = Variable(torch.cat(train_obs, dim=0), requires_grad=False)
-            train_actions = torch.cat(train_actions, dim=0)
-            bob_action_out, _, _, _ = self.policy_net(train_obs)
-            assert self.args.continuous == False # not implemented yet
-            if self.args.sp_extra_action:
-                # no need to imitate the extra action
-                train_actions = train_actions[:,:-1]
-                bob_action_out = bob_action_out[:-1]
-            bob_log_prob = multinomials_log_density(Variable(train_actions, requires_grad=False), bob_action_out)
-            imitate_loss = -bob_log_prob.sum()
-            stat['imitate_loss'] = imitate_loss.data[0]
-            loss += self.args.sp_imitate * imitate_loss
-
-        if self.args.charlie_finetune > 0:
-            ft_actions = []
-            ft_action_out = []
-            ft_advantages = []
-            for i in range(len(batch.misc)):
-                ft_actions.extend(batch.misc[i]['ft_action'])
-                ft_action_out.extend(batch.misc[i]['ft_action_out'])
-                ft_advantages.extend([advantages[i][0] for _ in batch.misc[i]['ft_action']])
-
-            ft_actions = torch.Tensor(np.stack(ft_actions))
-            ft_action_out = list(zip(*ft_action_out))
-            ft_action_out = [torch.cat(a, dim=0) for a in ft_action_out]
-            ft_advantages = torch.Tensor(ft_advantages).view(-1, 1)
-
-            env = self.env
-            if self.args.sp:
-                env = self.env.env
-            if env.args_bob.continuous:
-                ft_action_means, ft_action_log_stds, ft_action_stds = ft_action_out
-                ft_log_prob = normal_log_density(Variable(ft_actions, requires_grad=False), ft_action_means, ft_action_log_stds, ft_action_stds)
-            else:
-                ft_log_p_a = ft_action_out
-                ft_log_prob = multinomials_log_density(Variable(ft_actions, requires_grad=False), ft_log_p_a)
-            ft_action_loss = -Variable(ft_advantages, requires_grad=False) * ft_log_prob
-            ft_action_loss = ft_action_loss.sum()
-            loss = loss + ft_action_loss
-
-        loss.backward()
-        return stat
+    def serialize_episode(self, t, reward, done, stat):
+        return f'\t\ttotal reward={reward}'
 
     def run_batch(self):
         batch = []
         stat = dict()
         stat['num_episodes'] = 0
-        while len(batch) < self.args.batch_size:
-            episode, episode_stat = self.get_episode()
-            merge_stat(episode_stat, stat)
+        stat['batch_reward'] = 0
+        remaining_steps = self.args.num_steps
+        while remaining_steps > 0:
+            episode, episode_reward = self.get_episode(remaining_steps)
             stat['num_episodes'] += 1
+            stat['batch_reward'] += episode_reward
             batch += episode
-            if self.args.sp and self.args.sp_persist > 0:
-                # do not interrupt during persisting episodes
-                while self.env.should_persist():
-                    episode, episode_stat = self.get_episode()
-                    merge_stat(episode_stat, stat)
-                    stat['num_episodes'] += 1
-                    batch += episode
-
+            remaining_steps -= len(episode)
         stat['num_steps'] = len(batch)
-        stat['num_epochs'] = 1
         batch = Transition(*zip(*batch))
         return batch, stat
 
-    # only used when nthreads=1
+    # only used when single threading
     def train_batch(self):
         batch, stat = self.run_batch()
         self.optimizer.zero_grad()
@@ -310,22 +82,181 @@ class Trainer(object):
     def load_state_dict(self, state):
         self.optimizer.load_state_dict(state)
 
-    def hand_control(self, actual):
-        if self.args.sp:
-            action_list = self.env.env.factory.actions
+    def get_episode(self, max_steps):
+        episode = []
+        reward = 0
+
+        state = self.env.reset()
+        # TODO: HACK breaking interface
+        self.env.step_limit = max_steps
+
+        self.env.attr['display_mode'] = self.display
+        if self.display:
+            self.env.display()
+
+        t = 0
+        done = False
+        while not done:
+            # print(f"t = {t}")
+            with torch.no_grad():
+                action_out, value = self.run_policy(state)
+            action = select_action(self.args, action_out)
+            action, actual = translate_action(self.args, self.env, action)
+
+            step_state, step_reward, done, info = self.env.step(actual)
+            t += 1
+
+            # done = done or (t == self.args.max_steps - 1)
+            mask = self._compute_mask(done, info)
+
+            if self.args.verbose > 1:
+                print(self.serialize_step(t, step_reward, done, info))
+
+            if self.display:
+                self.env.display()
+
+            misc = self._compute_misc(info)
+            episode.append(Transition(state, np.array([action]), action_out, value, mask, step_state, step_reward, misc))
+
+            state = step_state
+            reward += step_reward
+
+        episode = self._postprocess_episode(episode)
+
+        if self.args.verbose > 0:
+            stat = self.env.get_stat() if hasattr(self.env, 'get_stat') else {}
+            print(self.serialize_episode(t, reward, done, stat))
+
+        return episode, reward
+
+    def compute_grad(self, batch):
+        stat = dict()
+        rewards = torch.Tensor(batch.reward)
+        rewards = self.args.reward_scale * rewards
+        masks = torch.Tensor(batch.mask)
+        actions = torch.from_numpy(np.concatenate(batch.action, 0))
+        returns = torch.Tensor(actions.size(0),1)
+        returns = self._compute_returns(returns, rewards, masks, batch)
+        advantages = torch.Tensor(actions.size(0),1)
+
+        # forward again in batch for speed-up
+        states = Variable(torch.cat(batch.state, dim=0), requires_grad=False)
+        action_out, values = self.run_policy(states)
+
+        for i in reversed(range(rewards.size(0))):
+            advantages[i] = returns[i] - values.data[i]
+
+        if self.args.normalize_rewards:
+            advantages = (advantages - advantages.mean()) / advantages.std()
+
+        if self.args.continuous:
+            action_means, action_log_stds, action_stds = action_out
+            log_prob = normal_log_density(Variable(actions, requires_grad=False), action_means, action_log_stds, action_stds)
+            stat['action_std'] = action_stds.mean(dim=1, keepdim=False).sum().data[0]
         else:
-            action_list = self.env.factory.actions
-        print(action_list)
-        a = input('Enter action id (can use asdw): ')
-        if a == '':
-            pass
-        elif a == 'w':
-            actual[0] = action_list['up']
-        elif a == 'a':
-            actual[0] = action_list['left']
-        elif a == 's':
-            actual[0] = action_list['down']
-        elif a == 'd':
-            actual[0] = action_list['right']
-        else:
-            actual[0] = int(a)
+            log_p_a = action_out
+            log_prob = multinomials_log_density(Variable(actions, requires_grad=False), log_p_a)
+        action_loss = -Variable(advantages, requires_grad=False) * log_prob
+        action_loss = action_loss.sum()
+        stat['action_loss'] = action_loss.item()
+
+        # value loss term
+        targets = Variable(returns, requires_grad=False)
+        value_loss = (values - targets).pow(2).sum()
+        stat['value_loss'] = value_loss.item()
+        loss = action_loss + self.args.value_coeff * value_loss
+
+        if not self.args.continuous:
+            # entropy regularization term
+            entropy = 0
+            for i in range(len(log_p_a)):
+                entropy -= (log_p_a[i] * log_p_a[i].exp()).sum()
+            stat['entropy'] = entropy.item()
+            if self.args.entr > 0:
+                loss -= self.args.entr * entropy
+
+        loss.backward()
+        return stat
+
+
+class ReinforceTrainer(Trainer):
+    def __init__(self, args, policy_net, env):
+        super(ReinforceTrainer, self).__init__(args, policy_net, env)
+
+    def run_policy(self, state):
+        action_out, value = self.policy_net(Variable(state))
+        return action_out, value
+
+
+class SelfPlayTrainer(Trainer):
+    def __init__(self, args, policy_net, env):
+        super(SelfPlayTrainer, self).__init__(args, policy_net, env)
+
+    def run_policy(self, state):
+        action_out, value, _, _ = self.policy_net(Variable(state))
+        return action_out, value
+
+    def serialize_step(self, t, reward, done, stat):
+        return f't={t}\treward={reward}\tmind={self.env.current_mind}'
+
+    def serialize_episode(self, t, reward, done, stat):
+        ser = f"\t\talice reward={stat['reward_alice']}\tbob reward={stat['reward_bob']}"
+        if not self.env.success:
+            ser += f"\n\t\tFAILED: best diff: {self.env.stat['best_diff_value']} vs {self.env.sp_state_thresh}, step {self.env.stat['best_diff_step']}"
+        return ser
+
+    def _compute_misc(self, info):
+        misc = super(SelfPlayTrainer, self)._compute_misc(info)
+        # computed pre-step
+        misc['mind'] = self.env.current_mind
+        if self.args.sp_persist > 0:
+            misc['sp_persist_count'] = self.env.persist_count
+        return misc
+
+    def _compute_mask(self, done, info):
+        # disconnect episode if sp_switched
+        return 0 if info.get('sp_switched') else super(SelfPlayTrainer, self)._compute_mask(done, info)
+
+    def _compute_returns(self, returns, rewards, masks, batch):
+        minds = [d['mind'] for d in batch.misc]
+
+        if self.args.sp_persist > 0:
+            persist_count = [d['sp_persist_count'] for d in batch.misc]
+
+        prev_return = 0
+        prev_alice_return = 0
+        prev_bob_return = 0
+        for i in reversed(range(rewards.size(0))):
+            returns[i] = rewards[i] + self.args.gamma * prev_return * masks[i]
+            if self.args.sp_persist > 0:
+                if minds[i] == 1:
+                    # Add Alice's return from the previous episode, but only inside persist episodes.
+                    if masks[i] == 0: # At Alice's last step in an episode.
+                        returns[i] += self.args.sp_persist_discount * prev_alice_return
+                    if persist_count[i] > 0:
+                        prev_alice_return = returns[i, 0]
+                    else:
+                        prev_alice_return = 0
+
+                if minds[i] == 2 and self.args.sp_persist_separate:
+                    # do the same with Bob
+                    if masks[i] == 0:
+                        returns[i] += self.args.sp_persist_discount * prev_bob_return
+                    if persist_count[i] > 0:
+                        prev_bob_return = returns[i, 0]
+                    else:
+                        prev_bob_return = 0
+            prev_return = returns[i, 0]
+        return returns
+
+    def _postprocess_episode(self, episode):
+        switch_t = -1
+        for t, step in enumerate(episode):
+            if step.misc.get('sp_switched'):
+                switch_t = t
+                break
+        if not self.env.test_mode:
+            episode[switch_t] = episode[switch_t]._replace(reward=episode[switch_t].reward + self.env.reward_terminal_mind(1, episode[switch_t].misc['early_stop']))
+        if switch_t > -1:
+            episode[-1] = episode[-1]._replace(reward=episode[-1].reward + self.env.reward_terminal_mind(2, episode[switch_t].misc['early_stop']))
+        return episode
