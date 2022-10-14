@@ -6,12 +6,12 @@ import time
 import torch
 import models
 import progressbar
-from self_play import SPModel
 from action_utils import parse_env_args
 from env_wrappers import GymWrapper
 from multi_threading import ThreadedTrainer
-from self_play import SelfPlayWrapper
-from trainer import ReinforceTrainer, SelfPlayTrainer, Trainer
+from play import PlayWrapper, PlayModel
+from self_play import SelfPlayWrapper, SPModel
+from trainer import ReinforceTrainer, SelfPlayTrainer, PlayTrainer
 
 def init_arg_parser():
     """Initialize the argument parser."""
@@ -70,22 +70,19 @@ def configure_torch(args):
 
 def init_env(args):
     """Initialize the environment."""
-    base_env = GymWrapper(gym.make('CartPole-v1', render_mode=None, new_step_api=True))
+    base_env = GymWrapper(gym.make('CartPole-v1', render_mode=None, new_step_api=True), new_step_api=True)
     if args.mode == "play":
-        return PlayWrapper(args, base_env)
+        env = PlayWrapper(args, base_env)
     elif args.mode == "self-play":
-        return SelfPlayWrapper(args, base_env)
+        env = SelfPlayWrapper(args, base_env, new_step_api = True)
     else:
-        return base_env
+        env = base_env
+    return gym.wrappers.TimeLimit(env, max_episode_steps = args.num_steps, new_step_api=True)
 
 def init_policy(args):
     if args.mode == 'play':
-        args.num_inputs = args.input_dim
-        args.input_dim = env.env.observation_dim # actual observation dim
         policy_net = PlayModel(args)
     elif args.mode == 'self-play':
-        args.num_inputs = args.input_dim
-        args.input_dim = env.env.observation_dim # actual observation dim
         policy_net = SPModel(args)
     else:
         # REINFORCE with Multi-Layer Perceptron
@@ -99,7 +96,7 @@ def init_policy(args):
 def init_trainer(args, policy_net):
     """Initialize the trainer."""
     if args.mode == 'play':
-        f = lambda: Trainer(args, policy_net, init_env(args))
+        f = lambda: PlayTrainer(args, policy_net, init_env(args))
     elif args.mode == 'self-play':
         f = lambda: SelfPlayTrainer(args, policy_net, init_env(args))
     else:
@@ -138,32 +135,38 @@ def visualize_policy(args, trainer):
             trainer.display = False
 
 def run(args, policy, trainer):
+    run_begin_time = time.time()
     reward = 0
     for epoch in range(args.num_epochs):
         print(f'Begin Epoch {epoch}')
         epoch_reward = 0
+        epoch_steps = 0
         epoch_begin_time = time.time()
         if args.progress:
             progress = progressbar.ProgressBar(max_value=args.num_batches, redirect_stdout=True).start()
 
         for n in range(args.num_batches):
             print(f'    Begin Batch {n}')
+            batch_begin_time = time.time()
             if args.progress:
                 progress.update(n+1)
             stat = trainer.train_batch()
             epoch_reward += stat['batch_reward']
-            print(f'    End Batch {n} (Reward: {stat["batch_reward"]:.2f})')
+            epoch_steps += stat['num_steps']
+            batch_time = time.time() - batch_begin_time
+            print(f'    End Batch {n} (Reward: {stat["batch_reward"]:.2f}    Time: {batch_time:.2f}s    Steps: {stat["num_steps"]})')
         if args.progress:
             progress.finish()
 
         epoch_time = time.time() - epoch_begin_time
         reward += epoch_reward
-        print(f'End Epoch {epoch} (Reward {epoch_reward:.2f}\tTime {epoch_time:.2f}s)')
+        print(f'End Epoch {epoch} (Reward: {epoch_reward:.2f}    Time: {epoch_time:.2f}s    Steps: {epoch_steps})')
 
         save(args, policy, trainer)
 
         visualize_policy(args, trainer)
-    print(f'End Run (Reward: {reward:.2f})')
+    run_time = time.time() - run_begin_time
+    print(f'End Run (Reward: {reward:.2f}    Time: {run_time:.2f}s)')
 
     return policy, trainer
 

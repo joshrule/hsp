@@ -3,7 +3,14 @@ import torch
 from torch.autograd import Variable
 
 def parse_env_args(args, env):
-    args.input_dim = env.observation_dim
+    print(f"computing input dim as {env.observation_dim} for env of {type(env)}")
+    # TODO: HACK
+    if args.mode == "self-play":
+        args.input_dim = env.env.env.observation_dim
+        args.num_inputs = env.env.observation_dim
+    else:
+        args.input_dim = env.observation_dim
+        args.num_inputs = args.input_dim
     if env.num_actions > 0:
         # environment takes discrete action
         args.continuous = env.is_continuous

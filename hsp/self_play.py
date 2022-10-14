@@ -93,6 +93,7 @@ class Alice(nn.Module):
     def __init__(self, args):
         super(Alice, self).__init__()
         self.args = args
+        print(f"input_dim {args.input_dim}, num_actions {args.num_actions}")
         self.enc_obs_curr = nn.Linear(args.input_dim, args.hid_size)
         self.enc_obs_init = nn.Linear(args.input_dim, args.hid_size)
         self.enc_meta = nn.Linear(2, args.hid_size)
@@ -155,13 +156,12 @@ class SPModel(nn.Module):
 
 
 class SelfPlayWrapper(EnvWrapper):
-    def __init__(self, args, env):
-        super(SelfPlayWrapper, self).__init__(env)
+    def __init__(self, args, env, **kwargs):
+        super(SelfPlayWrapper, self).__init__(env, **kwargs)
         assert args.mode == 'self-play'
         self.args = args
         self.total_steps = 0
         self.total_test_steps = 0
-        self.attr['display_mode'] = False
         self.persist_count = self.args.sp_persist
         self.success = None
         self.sp_state_thresh = 10 * self.args.sp_state_thresh_0
@@ -180,6 +180,16 @@ class SelfPlayWrapper(EnvWrapper):
     def is_continuous(self):
         self.env.is_continuous
 
+    @property
+    def num_actions(self):
+        """Assuming discrete actions"""
+        return self.env.num_actions
+
+    @property
+    def dim_actions(self):
+        """Assuming discrete actions"""
+        return self.env.dim_actions
+
     def should_persist(self):
         return (
             # haven't run the requisite number of episodes
@@ -192,7 +202,7 @@ class SelfPlayWrapper(EnvWrapper):
             not (self.args.sp_persist_separate and self.bob_last_state is None)
         )
 
-    def reset(self, persist=False, step_limit = None):
+    def reset(self, persist=False, **kwargs):
         if not persist:
             self.stat = dict()
             self.stat['reward_test'] = 0
@@ -209,11 +219,9 @@ class SelfPlayWrapper(EnvWrapper):
 
         if persist or self.should_persist():
             self.env.set_state(self.alice_last_state)
-            self.env.reset_stat()
             self.persist_count += 1
             if self.args.verbose > 0:
                 print(f"        PERSISTING: sub-episode {self.persist_count}")
-            self.step_limit -= self.current_time
         else:
             if self.args.verbose > 0:
                 print(f"        FULL RESET")
@@ -225,7 +233,6 @@ class SelfPlayWrapper(EnvWrapper):
                 print(f"\t\tincreasing alice_limit to {self.alice_limit} and resetting state_thresh from {self.sp_state_thresh:.4} to {(self.alice_limit + 1) * self.args.sp_state_thresh_0:.4}")
                 self.alice_limit += 1
                 self.sp_state_thresh = self.alice_limit * self.args.sp_state_thresh_0
-            self.step_limit = step_limit
         self.alice_last_state = None
         self.initial_state = self.env.get_state() # bypass wrapper
         self.current_time = 0
@@ -239,15 +246,15 @@ class SelfPlayWrapper(EnvWrapper):
             self.current_mind = 2
             self.target_obs = torch.zeros((1, self.env.observation_dim))
         else:
-            self.target_obs = self.env.get_current_obs()
+            self.target_obs = self.env.get_state()
             self.current_mind = 1
             self.test_mode = False
 
-        # print(f"        mind {self.current_mind} at {self.get_current_obs().numpy()}")
-        return self.get_current_obs()
+        # print(f"        mind {self.current_mind} at {self.get_state().numpy()}")
+        return self.get_state()
 
-    def get_current_obs(self):
-        current_obs = self.env.get_current_obs()
+    def get_state(self):
+        current_obs = self.env.get_state()
         if self.test_mode:
             mode = 1
             time = 0
@@ -273,38 +280,27 @@ class SelfPlayWrapper(EnvWrapper):
         self.current_time += 1
         self.current_mind_time += 1
 
-        obs_internal, reward, done, info = self.env.step(action)
-        # print(f"            step {self.total_steps}: mind {self.current_mind} @ {action} -> {self.get_current_obs()}")
+        obs_internal, reward, term, trunc, info = self.env.step(action)
 
         self.total_steps += 1
-
-        done = done or self.current_time == self.step_limit
 
         # Test Mode
         if self.test_mode:
             self.total_test_steps += 1
             self.stat['num_steps_test'] += 1
             self.stat['reward_test'] += reward
-            if done:
+            if term or trunc:
                 self.stat['num_episodes_test'] += 1
-            return self.get_current_obs(), reward, done, info
-
-        # Train Mode
-        # print(f"total_steps {self.current_time} vs. max_steps {self.args.max_steps} vs limit {self.step_limit}")
-        done = self.current_time == self.args.max_steps
-        early_stop = False
-        if self.current_time == self.step_limit:
-            early_stop = not done
-            done = True
-        info['early_stop'] = early_stop
-        reward = 0
+            return self.get_state(), reward, term, trunc, info
 
         # Alice
+        sp_reset = self.current_time == self.args.max_steps
+        term = False
         if self.current_mind == 1:
             self.stat['num_steps_alice'] += 1
             if self.current_time == self.alice_limit:
                 self.switch_mind()
-                print(f'        switched mind at time {self.current_time}, to {self.current_mind}')
+                print(f'        switched to mind {self.current_mind} at t={self.current_time}')
                 info['sp_switched'] = True
         # Bob
         else:
@@ -316,23 +312,23 @@ class SelfPlayWrapper(EnvWrapper):
                 self.stat['best_diff_step'] = self.current_mind_time
             if bool(diff <= self.sp_state_thresh):
                 self.success = True
-                done = done or not self.should_persist()
-                print(f"\n\t\tSUCCESS: best diff: {self.stat['best_diff_value']} vs {self.sp_state_thresh}, step {self.stat['best_diff_step']}")
+                term = not self.should_persist()
+                print(f"            SUCCESS: best diff: {self.stat['best_diff_value']} vs {self.sp_state_thresh}, step {self.stat['best_diff_step']}")
 
-        # print(f"self.success {self.success}, done {done}")
-        if self.success or done:
-            self.stat['reward_alice'] += self.reward_terminal_mind(1, early_stop)
+        if self.success or term:
+            self.stat['reward_alice'] += self.reward_terminal_mind(1)
             self.stat['num_episodes_alice'] += 1
-            self.stat['reward_bob'] += self.reward_terminal_mind(2, early_stop)
+            self.stat['reward_bob'] += self.reward_terminal_mind(2)
             self.stat['num_episodes_bob'] += 1
 
-        if self.success and not done:
+        # print(f"success {self.success} reset {sp_reset} term {term} trunc {trunc}")
+        if (self.success or sp_reset) and not (term or trunc):
             self.reset(persist=True)
             if self.args.sp_persist > 0:
                 self.stat['persist_count'] = self.persist_count
 
-        obs = self.get_current_obs()
-        return obs, reward, done, info
+        obs = self.get_state()
+        return obs, 0, term, trunc, info
 
     def switch_mind(self):
         self.current_mind_time = 0
@@ -342,7 +338,7 @@ class SelfPlayWrapper(EnvWrapper):
         if self.args.sp_mode == 'reverse':
             pass
         elif self.args.sp_mode == 'repeat':
-            self.target_obs = self.env.get_current_obs()
+            self.target_obs = self.env.get_state()
             if self.persist_count > 0 and self.args.sp_persist_separate:
                 # start Bob from his previous state
                 self.env.set_state(self.bob_last_state) # bypass wrapper
@@ -351,17 +347,13 @@ class SelfPlayWrapper(EnvWrapper):
         else:
             raise RuntimeError("Invalid sp_mode")
 
-    def reward_terminal_mind(self, mind, early_stop):
-        # print(f"terminal: mind {mind}, {self.current_mind}, {self.success}")
+    def reward_terminal_mind(self, mind):
         if self.test_mode:
             return 0
         if mind == 1:
             if self.current_mind == 2:
-                # print(f"1: returning {1 - (1 * self.success)}")
-                return 1 - (1 * (self.success or early_stop))
-                # print(f"2: returning 0")
+                return 1 - self.success
             return 0
-        # print(f"3: returning {(1 * self.success)}")
         return 1 * self.success
 
     def get_stat(self):
@@ -374,10 +366,7 @@ class SelfPlayWrapper(EnvWrapper):
             merge_stat(s, self.stat)
         return self.stat
 
-    def display(self):
-        obs = self.env.get_current_obs()
+    def render(self):
+        obs = self.env.get_state()
         self.display_obs.append(obs)
-        # if len(self.display_obs) > 1:
-        #     X = torch.cat(self.display_obs, dim=0)
-        #     self.attr['vis'].line(X, win='sp_obs_line')
-        self.env.display()
+        self.env.render()

@@ -45,7 +45,7 @@ class Trainer(object):
         return f't={t}\treward={reward}'
 
     def serialize_episode(self, t, reward, done, stat):
-        return f'\t\ttotal reward={reward}'
+        return f'        total time: {t}, total reward={reward:.4f}'
 
     def run_batch(self):
         batch = []
@@ -82,46 +82,44 @@ class Trainer(object):
     def load_state_dict(self, state):
         self.optimizer.load_state_dict(state)
 
-    def get_episode(self, max_steps):
+    def get_episode(self, max_episode_steps):
         episode = []
-        reward = 0
 
         state = self.env.reset()
-        # TODO: HACK breaking interface
-        self.env.step_limit = max_steps
+        # INVARIANT: assumes gym.wrappers.TimeLimit as outermost interface
+        # print(f"remaining max_episode_steps: {max_episode_steps} in {type(self.env)}")
+        self.env._max_episode_steps = max_episode_steps
 
-        self.env.attr['display_mode'] = self.display
         if self.display:
-            self.env.display()
+            self.env.render()
 
-        t = 0
         done = False
+        t = 0
         while not done:
-            # print(f"t = {t}")
             with torch.no_grad():
                 action_out, value = self.run_policy(state)
             action = select_action(self.args, action_out)
             action, actual = translate_action(self.args, self.env, action)
 
-            step_state, step_reward, done, info = self.env.step(actual)
+            step_state, step_reward, term, trunc, info = self.env.step(actual)
             t += 1
 
-            # done = done or (t == self.args.max_steps - 1)
+            done = term or trunc
             mask = self._compute_mask(done, info)
 
             if self.args.verbose > 1:
                 print(self.serialize_step(t, step_reward, done, info))
 
             if self.display:
-                self.env.display()
+                self.env.render()
 
             misc = self._compute_misc(info)
             episode.append(Transition(state, np.array([action]), action_out, value, mask, step_state, step_reward, misc))
 
             state = step_state
-            reward += step_reward
 
         episode = self._postprocess_episode(episode)
+        reward = sum(step.reward for step in episode)
 
         if self.args.verbose > 0:
             stat = self.env.get_stat() if hasattr(self.env, 'get_stat') else {}
@@ -187,6 +185,18 @@ class ReinforceTrainer(Trainer):
         action_out, value = self.policy_net(Variable(state))
         return action_out, value
 
+class PlayTrainer(Trainer):
+    def __init__(self, args, policy_net, env):
+        super(PlayTrainer, self).__init__(args, policy_net, env)
+
+    def run_policy(self, state):
+        action_out, value = self.policy_net(Variable(state))
+        return action_out, value
+
+    def serialize_episode(self, t, reward, done, stat):
+        ser = super(PlayTrainer, self).serialize_episode(t, reward, done, stat)
+        return ser + f" total plays: {stat['play_actions']}"
+
 
 class SelfPlayTrainer(Trainer):
     def __init__(self, args, policy_net, env):
@@ -200,9 +210,9 @@ class SelfPlayTrainer(Trainer):
         return f't={t}\treward={reward}\tmind={self.env.current_mind}'
 
     def serialize_episode(self, t, reward, done, stat):
-        ser = f"\t\talice reward={stat['reward_alice']}\tbob reward={stat['reward_bob']}"
+        ser = f"        total time: {t}, alice reward={stat['reward_alice']}, bob reward={stat['reward_bob']}"
         if not self.env.success:
-            ser += f"\n\t\tFAILED: best diff: {self.env.stat['best_diff_value']} vs {self.env.sp_state_thresh}, step {self.env.stat['best_diff_step']}"
+            ser += f"\n        FAILED: best diff: {self.env.stat['best_diff_value']} vs {self.env.sp_state_thresh}, step {self.env.stat['best_diff_step']}"
         return ser
 
     def _compute_misc(self, info):
@@ -256,7 +266,7 @@ class SelfPlayTrainer(Trainer):
                 switch_t = t
                 break
         if not self.env.test_mode:
-            episode[switch_t] = episode[switch_t]._replace(reward=episode[switch_t].reward + self.env.reward_terminal_mind(1, episode[switch_t].misc['early_stop']))
+            episode[switch_t] = episode[switch_t]._replace(reward=episode[switch_t].reward + self.env.reward_terminal_mind(1))
         if switch_t > -1:
-            episode[-1] = episode[-1]._replace(reward=episode[-1].reward + self.env.reward_terminal_mind(2, episode[switch_t].misc['early_stop']))
+            episode[-1] = episode[-1]._replace(reward=episode[-1].reward + self.env.reward_terminal_mind(2))
         return episode
