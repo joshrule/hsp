@@ -77,7 +77,8 @@ def init_env(args):
         env = SelfPlayWrapper(args, base_env, new_step_api = True)
     else:
         env = base_env
-    return gym.wrappers.TimeLimit(env, max_episode_steps = args.num_steps, new_step_api=True)
+    return env
+    # return gym.wrappers.TimeLimit(env, max_episode_steps = args.num_steps, new_step_api=True)
 
 def init_policy(args):
     if args.mode == 'play':

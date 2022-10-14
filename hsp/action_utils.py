@@ -6,8 +6,8 @@ def parse_env_args(args, env):
     print(f"computing input dim as {env.observation_dim} for env of {type(env)}")
     # TODO: HACK
     if args.mode == "self-play":
-        args.input_dim = env.env.env.observation_dim
-        args.num_inputs = env.env.observation_dim
+        args.input_dim = env.env.observation_dim
+        args.num_inputs = env.observation_dim
     else:
         args.input_dim = env.observation_dim
         args.num_inputs = args.input_dim

@@ -85,10 +85,8 @@ class Trainer(object):
     def get_episode(self, max_episode_steps):
         episode = []
 
-        state = self.env.reset()
-        # INVARIANT: assumes gym.wrappers.TimeLimit as outermost interface
-        # print(f"remaining max_episode_steps: {max_episode_steps} in {type(self.env)}")
-        self.env._max_episode_steps = max_episode_steps
+        # state = self.env.reset()
+        state = self.env.reset(max_steps = max_episode_steps, self_play = False)
 
         if self.display:
             self.env.render()
@@ -210,9 +208,12 @@ class SelfPlayTrainer(Trainer):
         return f't={t}\treward={reward}\tmind={self.env.current_mind}'
 
     def serialize_episode(self, t, reward, done, stat):
-        ser = f"        total time: {t}, alice reward={stat['reward_alice']}, bob reward={stat['reward_bob']}"
-        if not self.env.success:
-            ser += f"\n        FAILED: best diff: {self.env.stat['best_diff_value']} vs {self.env.sp_state_thresh}, step {self.env.stat['best_diff_step']}"
+        if self.env.self_play:
+            ser = f"        total time: {t}, alice reward={stat['reward_alice']}, bob reward={stat['reward_bob']}"
+            if not self.env.success:
+                ser += f"\n        FAILED: best diff: {self.env.stat['best_diff_value']} vs {self.env.sp_state_thresh}, step {self.env.stat['best_diff_step']}"
+        else:
+            ser = f"        total time: {t}, test reward={stat['reward_test']}"
         return ser
 
     def _compute_misc(self, info):
@@ -265,7 +266,7 @@ class SelfPlayTrainer(Trainer):
             if step.misc.get('sp_switched'):
                 switch_t = t
                 break
-        if not self.env.test_mode:
+        if self.env.self_play:
             episode[switch_t] = episode[switch_t]._replace(reward=episode[switch_t].reward + self.env.reward_terminal_mind(1))
         if switch_t > -1:
             episode[-1] = episode[-1]._replace(reward=episode[-1].reward + self.env.reward_terminal_mind(2))

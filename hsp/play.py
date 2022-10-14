@@ -36,41 +36,6 @@ class PlayModel(nn.Module):
         else:
             return F.log_softmax(self.action_head(x), dim=-1), v
 
-# class PlayModel(nn.Module):
-#     def __init__(self, args):
-#         super(SPModel, self).__init__()
-#         self.alice_args = args
-#         self.bob_args = args
-#         self.bob_args.num_inputs += 1
-#         self.bob_args.naction_heads = [self.bob_args.num_inputs]
-#         self.alice = Alice(self.alice_args)
-#         self.bob = Bob(self.bob_args)
-#
-#     def forward(self, x):
-#         # x's last element is the mind index.
-#         mind = x[:,-1:].contiguous()
-#
-#         amask = (mind == 1)
-#         bmask = (mind == 2)
-#         if amask.data.sum() == 0:
-#             return self.bob(x)
-#         if bmask.data.sum() == 0:
-#             y, v = self.alice(x)
-#             return y, v, None, None
-#
-#         ax = x[amask.expand(x.size())].view(int(amask.data.sum()), x.size(1))
-#         bx = x[bmask.expand(x.size())].view(int(bmask.data.sum()), x.size(1))
-#         ay, av = self.alice(ax)
-#         by, bv, gv, ev = self.bob(bx)
-#         y = Variable(mind.data.new(x.size(0), ay.size(1)))
-#         y.masked_scatter_(amask.expand(y.size()), ay)
-#         y.masked_scatter_(bmask.expand(y.size()), by)
-#         v = mind.clone()
-#         v.masked_scatter_(amask, av)
-#         v.masked_scatter_(bmask, bv)
-#
-#         return y, v, gv, ev
-
 class PlayWrapper(EnvWrapper):
     def __init__(self, args, env):
         super(PlayWrapper, self).__init__(env)
@@ -127,8 +92,8 @@ class PlayWrapper(EnvWrapper):
 
         if action == self.num_actions - 1:
             self.playing = 1 if not self.playing else 0
-            # print(f"            PLAY ACTION: toggling to {self.playing}")
             self.stat['play_actions'] += 1
+            #self.env.toggle_self_play(self.playing)
             obs = self.get_state()
             reward = 4.0 * self.playing
             return obs, reward, False, False, {}

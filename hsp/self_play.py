@@ -166,7 +166,6 @@ class SelfPlayWrapper(EnvWrapper):
         self.success = None
         self.sp_state_thresh = 10 * self.args.sp_state_thresh_0
         self.alice_limit = 1
-        self.current_mind = 2
 
     @property
     def observation_dim(self):
@@ -190,7 +189,168 @@ class SelfPlayWrapper(EnvWrapper):
         """Assuming discrete actions"""
         return self.env.dim_actions
 
-    def should_persist(self):
+    def get_stat(self):
+        if hasattr(self.env, 'get_stat'):
+            s = self.env.get_stat()
+            if 'success' in s:
+                if not self.self_play:
+                    self.stat['success_test'] = s['success']
+                del s['success']
+            merge_stat(s, self.stat)
+        return self.stat
+
+    def get_state(self):
+        current_obs = self.env.get_state()
+        if not self.self_play:
+            mode = 1
+            time = 0
+        else:
+            mode = -1
+            time = self.current_time / self.max_steps
+        obs = current_obs
+        obs = torch.cat((obs, torch.Tensor([[mode, time]])), dim=1)
+        obs = torch.cat((obs, self.target_obs), dim=1)
+        obs = torch.cat((obs, torch.Tensor([[self.current_mind]])), dim=1)
+        return obs
+
+    def render(self):
+        obs = self.env.get_state()
+        self.display_obs.append(obs)
+        self.env.render()
+
+    def reset(self, max_steps = None, persist=False, self_play=True, **kwargs):
+        if persist or self._should_persist():
+            if self.args.verbose > 0:
+                print(f"        PERSISTING: sub-episode {self.persist_count}")
+            self.env.set_state(self.alice_last_state)
+            self.persist_count += 1
+        else:
+            self.stat = dict()
+            self.stat['reward_test'] = 0
+            self.stat['reward_alice'] = 0
+            self.stat['reward_bob'] = 0
+            self.stat['num_steps_test'] = 0
+            self.stat['num_steps_alice'] = 0
+            self.stat['num_steps_bob'] = 0
+            self.stat['num_episodes_test'] = 0
+            self.stat['num_episodes_alice'] = 0
+            self.stat['num_episodes_bob'] = 0
+            if self.args.verbose > 0:
+                print(f"        FULL RESET")
+            self.env.reset()
+            self.persist_count = 0
+            if self_play:
+                f = self.args.sp_state_thresh_factor
+                self.sp_state_thresh *= f if self.success else 1/f
+                if self.sp_state_thresh <= self.args.sp_state_thresh_1 and self.alice_limit < self.args.sp_steps:
+                    print(f"\t\tincreasing alice_limit to {self.alice_limit} and resetting state_thresh from {self.sp_state_thresh:.4} to {(self.alice_limit + 1) * self.args.sp_state_thresh_0}")
+                    self.alice_limit += 1
+                    self.sp_state_thresh = self.alice_limit * self.args.sp_state_thresh_0
+        self.stat['best_diff_value'] = np.inf
+        self.stat['best_diff_step'] = np.inf
+        self.alice_last_state = None
+        self.initial_state = self.env.get_state() # bypass wrapper
+        self.current_time = 0
+        self.current_mind_time = 0
+        self.success = False
+        self.display_obs = []
+        self.target_obs_curr = []
+        self.target_reached_curr = 0
+        self.self_play = self_play
+        self.max_steps = max_steps if max_steps is not None else self.args.max_steps
+        if self.self_play:
+            self.target_obs = self.env.get_state()
+            self.current_mind = 1
+        else:
+            self.target_obs = torch.zeros((1, self.env.observation_dim))
+            self.current_mind = 2
+        print(f"        starting as mind: {self.current_mind}")
+        return self.get_state()
+
+    def toggle_self_play(self, target = None):
+        '''
+        Call only if self has been reset at least once.
+        '''
+        if target is not None and target == self.self_play:
+            return
+        self.self_play = not self.self_play if target is None else target
+        if self.self_play:
+            print("turning on self-play")
+            self.target_obs = self.env.get_state()
+            self.current_mind = 1
+            # Alice is only on during self-play, so mind_time resets.
+            self.current_mind_time = 0
+        else:
+            print("turning off self-play")
+            self.target_obs = torch.zeros((1, self.env.observation_dim))
+            if self.current_mind == 1:
+                self.current_mind_time = 0
+            self.current_mind = 2
+        return self.self_play
+
+    def step(self, action):
+        self.current_time += 1
+        self.current_mind_time += 1
+
+        obs_internal, reward, term, trunc, info = self.env.step(action)
+        trunc |= self.current_time >= self.max_steps
+
+        self.total_steps += 1
+
+        # Test Mode
+        if not self.self_play:
+            self.total_test_steps += 1
+            self.stat['num_steps_test'] += 1
+            self.stat['reward_test'] += reward
+            if term or trunc:
+                self.stat['num_episodes_test'] += 1
+            return self.get_state(), reward, term, trunc, info
+
+        # Alice
+        term = self.current_time >= self.args.max_steps
+        if self.current_mind == 1:
+            self.stat['num_steps_alice'] += 1
+            if self.current_time == self.alice_limit:
+                self._switch_mind()
+                print(f'        switched to mind {self.current_mind} at t={self.current_time}')
+                info['sp_switched'] = True
+        # Bob
+        else:
+            self.stat['num_steps_bob'] += 1
+            self.bob_last_state = self.env.get_state()
+            diff = self._get_bob_diff(obs_internal, self.target_obs)
+            if diff < self.stat['best_diff_value']:
+                self.stat['best_diff_value'] = diff
+                self.stat['best_diff_step'] = self.current_mind_time
+            if bool(diff <= self.sp_state_thresh):
+                self.success = True
+                term = not self._should_persist()
+                print(f"            SUCCESS: best diff: {self.stat['best_diff_value']} vs {self.sp_state_thresh}, step {self.stat['best_diff_step']}")
+
+        if self.success or term:
+            self.stat['reward_alice'] += self.reward_terminal_mind(1)
+            self.stat['num_episodes_alice'] += 1
+            self.stat['reward_bob'] += self.reward_terminal_mind(2)
+            self.stat['num_episodes_bob'] += 1
+
+        if self.success and not (term or trunc):
+            self.reset(persist=True)
+            if self.args.sp_persist > 0:
+                self.stat['persist_count'] = self.persist_count
+
+        obs = self.get_state()
+        return obs, 0, term, trunc, info
+
+    def _get_bob_diff(self, obs, target):
+        sp_state_mask = self.env.property_recursive('sp_state_mask')
+        if sp_state_mask is not None:
+            diff = torch.dist(target.view(-1) * sp_state_mask,
+                        obs.view(-1) * sp_state_mask)
+        else:
+            diff = torch.dist(target, obs)
+        return diff
+
+    def _should_persist(self):
         return (
             # haven't run the requisite number of episodes
             self.args.sp_persist - 1 > self.persist_count and
@@ -202,135 +362,7 @@ class SelfPlayWrapper(EnvWrapper):
             not (self.args.sp_persist_separate and self.bob_last_state is None)
         )
 
-    def reset(self, persist=False, **kwargs):
-        if not persist:
-            self.stat = dict()
-            self.stat['reward_test'] = 0
-            self.stat['reward_alice'] = 0
-            self.stat['reward_bob'] = 0
-            self.stat['num_steps_test'] = 0
-            self.stat['num_steps_alice'] = 0
-            self.stat['num_steps_bob'] = 0
-            self.stat['num_episodes_test'] = 0
-            self.stat['num_episodes_alice'] = 0
-            self.stat['num_episodes_bob'] = 0
-        self.stat['best_diff_value'] = np.inf
-        self.stat['best_diff_step'] = np.inf
-
-        if persist or self.should_persist():
-            self.env.set_state(self.alice_last_state)
-            self.persist_count += 1
-            if self.args.verbose > 0:
-                print(f"        PERSISTING: sub-episode {self.persist_count}")
-        else:
-            if self.args.verbose > 0:
-                print(f"        FULL RESET")
-            self.env.reset()
-            self.persist_count = 0
-            f = self.args.sp_state_thresh_factor
-            self.sp_state_thresh *= f if self.success else 1/f
-            if self.sp_state_thresh <= self.args.sp_state_thresh_1 and self.alice_limit < self.args.sp_steps:
-                print(f"\t\tincreasing alice_limit to {self.alice_limit} and resetting state_thresh from {self.sp_state_thresh:.4} to {(self.alice_limit + 1) * self.args.sp_state_thresh_0:.4}")
-                self.alice_limit += 1
-                self.sp_state_thresh = self.alice_limit * self.args.sp_state_thresh_0
-        self.alice_last_state = None
-        self.initial_state = self.env.get_state() # bypass wrapper
-        self.current_time = 0
-        self.current_mind_time = 0
-        self.success = False
-        self.display_obs = []
-        self.target_obs_curr = []
-        self.target_reached_curr = 0
-        if self.total_test_steps < self.args.sp_test_rate * self.total_steps:
-            self.test_mode = True
-            self.current_mind = 2
-            self.target_obs = torch.zeros((1, self.env.observation_dim))
-        else:
-            self.target_obs = self.env.get_state()
-            self.current_mind = 1
-            self.test_mode = False
-
-        # print(f"        mind {self.current_mind} at {self.get_state().numpy()}")
-        return self.get_state()
-
-    def get_state(self):
-        current_obs = self.env.get_state()
-        if self.test_mode:
-            mode = 1
-            time = 0
-        else:
-            mode = -1
-            time = self.current_time / self.args.max_steps
-        obs = current_obs
-        obs = torch.cat((obs, torch.Tensor([[mode, time]])), dim=1)
-        obs = torch.cat((obs, self.target_obs), dim=1)
-        obs = torch.cat((obs, torch.Tensor([[self.current_mind]])), dim=1)
-        return obs
-
-    def get_bob_diff(self, obs, target):
-        sp_state_mask = self.env.property_recursive('sp_state_mask')
-        if sp_state_mask is not None:
-            diff = torch.dist(target.view(-1) * sp_state_mask,
-                        obs.view(-1) * sp_state_mask)
-        else:
-            diff = torch.dist(target, obs)
-        return diff
-
-    def step(self, action):
-        self.current_time += 1
-        self.current_mind_time += 1
-
-        obs_internal, reward, term, trunc, info = self.env.step(action)
-
-        self.total_steps += 1
-
-        # Test Mode
-        if self.test_mode:
-            self.total_test_steps += 1
-            self.stat['num_steps_test'] += 1
-            self.stat['reward_test'] += reward
-            if term or trunc:
-                self.stat['num_episodes_test'] += 1
-            return self.get_state(), reward, term, trunc, info
-
-        # Alice
-        sp_reset = self.current_time == self.args.max_steps
-        term = False
-        if self.current_mind == 1:
-            self.stat['num_steps_alice'] += 1
-            if self.current_time == self.alice_limit:
-                self.switch_mind()
-                print(f'        switched to mind {self.current_mind} at t={self.current_time}')
-                info['sp_switched'] = True
-        # Bob
-        else:
-            self.stat['num_steps_bob'] += 1
-            self.bob_last_state = self.env.get_state()
-            diff = self.get_bob_diff(obs_internal, self.target_obs)
-            if diff < self.stat['best_diff_value']:
-                self.stat['best_diff_value'] = diff
-                self.stat['best_diff_step'] = self.current_mind_time
-            if bool(diff <= self.sp_state_thresh):
-                self.success = True
-                term = not self.should_persist()
-                print(f"            SUCCESS: best diff: {self.stat['best_diff_value']} vs {self.sp_state_thresh}, step {self.stat['best_diff_step']}")
-
-        if self.success or term:
-            self.stat['reward_alice'] += self.reward_terminal_mind(1)
-            self.stat['num_episodes_alice'] += 1
-            self.stat['reward_bob'] += self.reward_terminal_mind(2)
-            self.stat['num_episodes_bob'] += 1
-
-        # print(f"success {self.success} reset {sp_reset} term {term} trunc {trunc}")
-        if (self.success or sp_reset) and not (term or trunc):
-            self.reset(persist=True)
-            if self.args.sp_persist > 0:
-                self.stat['persist_count'] = self.persist_count
-
-        obs = self.get_state()
-        return obs, 0, term, trunc, info
-
-    def switch_mind(self):
+    def _switch_mind(self):
         self.current_mind_time = 0
         self.alice_last_state = self.env.get_state()
         self.current_mind = 2
@@ -340,33 +372,19 @@ class SelfPlayWrapper(EnvWrapper):
         elif self.args.sp_mode == 'repeat':
             self.target_obs = self.env.get_state()
             if self.persist_count > 0 and self.args.sp_persist_separate:
-                # start Bob from his previous state
-                self.env.set_state(self.bob_last_state) # bypass wrapper
+                # start Bob from his previous state.
+                self.env.set_state(self.bob_last_state)
             else:
-                self.env.set_state(self.initial_state) # bypass wrapper
+                # start Bob from the/Alice's initial state.
+                self.env.set_state(self.initial_state)
         else:
             raise RuntimeError("Invalid sp_mode")
 
     def reward_terminal_mind(self, mind):
-        if self.test_mode:
+        if not self.self_play:
             return 0
         if mind == 1:
             if self.current_mind == 2:
                 return 1 - self.success
             return 0
         return 1 * self.success
-
-    def get_stat(self):
-        if hasattr(self.env, 'get_stat'):
-            s = self.env.get_stat()
-            if 'success' in s:
-                if self.test_mode:
-                    self.stat['success_test'] = s['success']
-                del s['success']
-            merge_stat(s, self.stat)
-        return self.stat
-
-    def render(self):
-        obs = self.env.get_state()
-        self.display_obs.append(obs)
-        self.env.render()
