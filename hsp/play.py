@@ -76,9 +76,11 @@ class PlayWrapper(EnvWrapper):
         return self.get_state()
 
     def get_state(self):
-        playing = torch.Tensor([[self.playing]])
+        playing = torch.Tensor([[self.playing*1]])
         env_obs = self.env.get_state()
-        return torch.cat((playing, env_obs), dim=1)
+        env_obs_1 = env_obs[:,:self.args.input_dim]
+        env_obs_2 = env_obs[:,self.args.input_dim:]
+        return torch.cat((env_obs_1, playing, env_obs_2), dim=1)
 
     def step(self, action):
         # Time management
