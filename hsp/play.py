@@ -65,7 +65,7 @@ class PlayWrapper(EnvWrapper):
         if action == self.args.no_op:
             self.playing = not self.playing
             self.stat['play_actions'] += 1
-            #self.env.toggle_self_play(self.playing)
+            self.env.toggle_self_play(self.playing)
             _, reward, term, trunc, info = self.env.step(action)
             obs = self.get_state()
             reward += 1.0 * self.playing

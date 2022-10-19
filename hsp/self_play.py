@@ -238,13 +238,12 @@ class SelfPlayWrapper(EnvWrapper):
                 print(f"        FULL RESET")
             self.env.reset(**kwargs)
             self.persist_count = 0
-            if self_play:
-                f = self.args.sp_state_thresh_factor
-                self.sp_state_thresh *= f if self.success else 1/f
-                if self.sp_state_thresh <= self.args.sp_state_thresh_1 and self.alice_limit < self.args.sp_steps:
-                    print(f"\t\tincreasing alice_limit to {self.alice_limit} and resetting state_thresh from {self.sp_state_thresh:.4} to {(self.alice_limit + 1) * self.args.sp_state_thresh_0}")
-                    self.alice_limit += 1
-                    self.sp_state_thresh = self.alice_limit * self.args.sp_state_thresh_0
+            f = self.args.sp_state_thresh_factor
+            self.sp_state_thresh *= f if self.success else 1/f
+            if self.sp_state_thresh <= self.args.sp_state_thresh_1 and self.alice_limit < self.args.sp_steps:
+                print(f"\t\tincreasing alice_limit to {self.alice_limit} and resetting state_thresh from {self.sp_state_thresh:.4} to {(self.alice_limit + 1) * self.args.sp_state_thresh_0}")
+                self.alice_limit += 1
+                self.sp_state_thresh = self.alice_limit * self.args.sp_state_thresh_0
         self.stat['best_diff_value'] = np.inf
         self.stat['best_diff_step'] = np.inf
         self.alice_last_state = None
@@ -269,17 +268,15 @@ class SelfPlayWrapper(EnvWrapper):
         '''
         Call only if self has been reset at least once.
         '''
-        if target is not None and target == self.self_play:
+        if target == self.self_play:
             return
         self.self_play = not self.self_play if target is None else target
         if self.self_play:
-            print("turning on self-play")
             self.target_obs = self.env.get_state()
             self.current_mind = 1
             # Alice is only on during self-play, so mind_time resets.
             self.current_mind_time = 0
         else:
-            print("turning off self-play")
             self.target_obs = torch.zeros((1, self.env.observation_dim))
             if self.current_mind == 1:
                 self.current_mind_time = 0
@@ -307,7 +304,7 @@ class SelfPlayWrapper(EnvWrapper):
         term = self.current_time >= self.args.max_steps
         if self.current_mind == 1:
             self.stat['num_steps_alice'] += 1
-            if self.current_time == self.alice_limit:
+            if self.current_mind_time >= self.alice_limit:
                 self._switch_mind()
                 print(f'        switched to mind {self.current_mind} at t={self.current_time}')
                 info['sp_switched'] = True
