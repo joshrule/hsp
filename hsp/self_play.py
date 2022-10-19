@@ -205,7 +205,7 @@ class SelfPlayWrapper(EnvWrapper):
             time = 0
         else:
             mode = -1
-            time = self.current_time / self.max_steps
+            time = self.current_time / self.args.max_steps
         obs = current_obs
         obs = torch.cat((obs, torch.Tensor([[mode, time]])), dim=1)
         obs = torch.cat((obs, self.target_obs), dim=1)
@@ -217,7 +217,7 @@ class SelfPlayWrapper(EnvWrapper):
         self.display_obs.append(obs)
         self.env.render()
 
-    def reset(self, max_steps = None, persist=False, self_play=True, **kwargs):
+    def reset(self, persist=False, self_play=True, **kwargs):
         if persist or self._should_persist():
             if self.args.verbose > 0:
                 print(f"        PERSISTING: sub-episode {self.persist_count}")
@@ -236,7 +236,7 @@ class SelfPlayWrapper(EnvWrapper):
             self.stat['num_episodes_bob'] = 0
             if self.args.verbose > 0:
                 print(f"        FULL RESET")
-            self.env.reset()
+            self.env.reset(**kwargs)
             self.persist_count = 0
             if self_play:
                 f = self.args.sp_state_thresh_factor
@@ -256,7 +256,6 @@ class SelfPlayWrapper(EnvWrapper):
         self.target_obs_curr = []
         self.target_reached_curr = 0
         self.self_play = self_play
-        self.max_steps = max_steps if max_steps is not None else self.args.max_steps
         if self.self_play:
             self.target_obs = self.env.get_state()
             self.current_mind = 1
@@ -292,7 +291,6 @@ class SelfPlayWrapper(EnvWrapper):
         self.current_mind_time += 1
 
         obs_internal, reward, term, trunc, info = self.env.step(action)
-        trunc |= self.current_time >= self.max_steps
 
         self.total_steps += 1
 

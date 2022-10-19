@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import gym
 from gym.spaces.utils import flatdim
+from gym.wrappers import TimeLimit
 from mazebase.torch_featurizers import GridFeaturizer
 from utils import merge_stat
 
@@ -62,6 +63,19 @@ class EnvWrapper(gym.Wrapper):
             return self.env.property_recursive(property_name, defaul_val)
         else:
             return defaul_val
+
+class ResetableTimeLimit(TimeLimit):
+    def reset(self, max_episode_steps = None, **kwargs):
+        """Resets the environment with :param:`**kwargs` and sets the number of steps elapsed to zero.
+        Args:
+            **kwargs: The kwargs to reset the environment with
+        Returns:
+            The reset environment
+        """
+        env = super(ResetableTimeLimit, self).reset(**kwargs)
+        if max_episode_steps is not None:
+            self._max_episode_steps = max_episode_steps
+        return env
 
 class GymWrapper(EnvWrapper):
     '''

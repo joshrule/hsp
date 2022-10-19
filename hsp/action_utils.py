@@ -17,7 +17,6 @@ def parse_env_args(args, env):
         args.input_dim = env.observation_dim
         args.num_inputs = args.input_dim
     print(f"computing input dim as {args.input_dim} and num_inputs as {args.num_inputs} for env of {type(env)}")
-    print(f"env.env.env.observation_dim {env.env.env.observation_dim} env.env.observation_dim {env.env.observation_dim} env.observation_dim {env.observation_dim} args.input_dim {args.input_dim}")
     if env.num_actions > 0:
         # environment takes discrete action
         args.continuous = env.is_continuous

@@ -7,7 +7,7 @@ import torch
 import models
 import progressbar
 from action_utils import parse_env_args
-from env_wrappers import GymWrapper
+from env_wrappers import GymWrapper, ResetableTimeLimit
 from multi_threading import ThreadedTrainer
 from play import PlayWrapper
 from self_play import SelfPlayWrapper, SPModel
@@ -70,7 +70,9 @@ def configure_torch(args):
 
 def init_env(args):
     """Initialize the environment."""
-    env = GymWrapper(gym.make('CartPole-v1', render_mode=None, new_step_api=True), new_step_api=True)
+    base_env = gym.make('CartPole-v1', render_mode=None, new_step_api=True)
+    gym_env = GymWrapper(base_env, new_step_api=True)
+    env = ResetableTimeLimit(gym_env, max_episode_steps = args.max_steps, new_step_api = True)
     if args.mode == "play":
         env = SelfPlayWrapper(args, env, new_step_api = True)
         return PlayWrapper(args, env, new_step_api = True)
