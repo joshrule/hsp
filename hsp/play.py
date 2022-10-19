@@ -8,34 +8,6 @@ import action_utils
 from env_wrappers import *
 from self_play import SPModel
 
-class PlayModel(nn.Module):
-    def __init__(self, args):
-        super(PlayModel, self).__init__()
-        self.affine1 = nn.Linear(args.input_dim, args.hid_size)
-        self.affine2 = nn.Linear(args.hid_size, args.hid_size)
-        self.continuous = args.continuous
-        if self.continuous:
-            raise Exception("Shouldn't be here")
-            self.action_mean = nn.Linear(args.hid_size, args.dim_actions)
-            self.action_log_std = nn.Parameter(torch.zeros(1, args.dim_actions))
-            # self.action_log_std = nn.Parameter(torch.zeros(1, args.dim_actions))
-        else:
-            self.action_head = nn.Linear(args.hid_size, args.num_actions)
-        self.value_head = nn.Linear(args.hid_size, 1)
-
-    def forward(self, x):
-        x = x.double()
-        x = torch.tanh(self.affine1(x))
-        x = torch.tanh(self.affine2(x))
-        v = self.value_head(x)
-        if self.continuous:
-            action_mean = self.action_mean(x)
-            action_log_std = self.action_log_std.expand_as(action_mean)
-            action_std = torch.exp(action_log_std)
-            return (action_mean, action_log_std, action_std), v
-        else:
-            return F.log_softmax(self.action_head(x), dim=-1), v
-
 class PlayWrapper(EnvWrapper):
     def __init__(self, args, env, **kwargs):
         super(PlayWrapper, self).__init__(env)

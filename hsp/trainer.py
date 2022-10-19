@@ -190,7 +190,7 @@ class PlayTrainer(Trainer):
         super(PlayTrainer, self).__init__(args, policy_net, env)
 
     def run_policy(self, state):
-        action_out, value = self.policy_net(Variable(state))
+        action_out, value, _, _ = self.policy_net(Variable(state))
         return action_out, value
 
     def serialize_episode(self, t, reward, done, stat):

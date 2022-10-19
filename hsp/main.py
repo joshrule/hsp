@@ -9,7 +9,7 @@ import progressbar
 from action_utils import parse_env_args
 from env_wrappers import GymWrapper
 from multi_threading import ThreadedTrainer
-from play import PlayWrapper, PlayModel
+from play import PlayWrapper
 from self_play import SelfPlayWrapper, SPModel
 from trainer import ReinforceTrainer, SelfPlayTrainer, PlayTrainer
 
@@ -81,7 +81,7 @@ def init_env(args):
 
 def init_policy(args):
     if args.mode == 'play':
-        policy_net = PlayModel(args)
+        policy_net = SPModel(args)
     elif args.mode == 'self-play':
         policy_net = SPModel(args)
     else:
