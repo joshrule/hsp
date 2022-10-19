@@ -72,7 +72,7 @@ class PlayWrapper(EnvWrapper):
         self.total_steps = 0
         self.total_test_steps = 0
         self.total_play_steps = 0
-        self.playing = 0
+        self.playing = False
         return self.get_state()
 
     def get_state(self):
@@ -92,7 +92,7 @@ class PlayWrapper(EnvWrapper):
 
 
         if action == self.num_actions - 1:
-            self.playing = 1 if not self.playing else 0
+            self.playing = not self.playing
             self.stat['play_actions'] += 1
             #self.env.toggle_self_play(self.playing)
             obs = self.get_state()

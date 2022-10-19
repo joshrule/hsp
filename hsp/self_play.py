@@ -81,7 +81,7 @@ class Bob(nn.Module):
 
     def forward(self, x):
         obs_current = x[:, :self.args.input_dim]
-        obs_current_meta = x[:, :self.args.input_dim+2]
+        obs_current_meta = x[:, :self.args.input_dim+self.args.meta_dim]
         N = obs_current_meta.size()[1]
         obs_target = x[:, N:N+self.args.input_dim]
         N += obs_target.size()[1]
@@ -96,7 +96,7 @@ class Alice(nn.Module):
         print(f"input_dim {args.input_dim}, num_actions {args.num_actions}")
         self.enc_obs_curr = nn.Linear(args.input_dim, args.hid_size)
         self.enc_obs_init = nn.Linear(args.input_dim, args.hid_size)
-        self.enc_meta = nn.Linear(2, args.hid_size)
+        self.enc_meta = nn.Linear(args.meta_dim, args.hid_size)
         self.affine2 = nn.Linear(args.hid_size, args.hid_size)
         self.continuous = args.continuous
         if self.continuous:
@@ -108,8 +108,8 @@ class Alice(nn.Module):
 
     def forward(self, x):
         obs_curr = x[:, :self.args.input_dim]
-        obs_meta = x[:, self.args.input_dim:self.args.input_dim+2]
-        obs_init = x[:, self.args.input_dim+2:self.args.input_dim*2+2]
+        obs_meta = x[:, self.args.input_dim:self.args.input_dim+self.args.meta_dim]
+        obs_init = x[:, self.args.input_dim+self.args.meta_dim:self.args.input_dim*2+self.args.meta_dim]
         h1 = torch.tanh(self.enc_obs_curr(obs_curr) + self.enc_obs_init(obs_init) + self.enc_meta(obs_meta))
         h2 = torch.tanh(self.affine2(h1))
         v = self.value_head(h2)
