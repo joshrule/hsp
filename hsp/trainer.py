@@ -85,8 +85,10 @@ class Trainer(object):
     def get_episode(self, max_episode_steps):
         episode = []
 
-        # state = self.env.reset()
-        state = self.env.reset(max_steps = max_episode_steps, self_play = False)
+        if "play" in self.args.mode:
+            state = self.env.reset(max_steps = max_episode_steps, self_play = False)
+        else:
+            state = self.env.reset()
 
         if self.display:
             self.env.render()

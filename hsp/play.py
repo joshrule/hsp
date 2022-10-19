@@ -37,9 +37,8 @@ class PlayModel(nn.Module):
             return F.log_softmax(self.action_head(x), dim=-1), v
 
 class PlayWrapper(EnvWrapper):
-    def __init__(self, args, env):
+    def __init__(self, args, env, **kwargs):
         super(PlayWrapper, self).__init__(env)
-        assert args.mode == 'play'
         self.args = args
         self.steps = 0
         self.test_steps = 0
@@ -66,10 +65,10 @@ class PlayWrapper(EnvWrapper):
     def is_continuous(self):
         self.env.is_continuous
 
-    def reset(self):
+    def reset(self, **kwargs):
         self.stat = dict()
         self.stat['play_actions'] = 0
-        self.env.reset()
+        self.env.reset(**kwargs)
         self.total_steps = 0
         self.total_test_steps = 0
         self.total_play_steps = 0

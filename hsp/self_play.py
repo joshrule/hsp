@@ -158,7 +158,6 @@ class SPModel(nn.Module):
 class SelfPlayWrapper(EnvWrapper):
     def __init__(self, args, env, **kwargs):
         super(SelfPlayWrapper, self).__init__(env, **kwargs)
-        assert args.mode == 'self-play'
         self.args = args
         self.total_steps = 0
         self.total_test_steps = 0

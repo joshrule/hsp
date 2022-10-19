@@ -70,15 +70,14 @@ def configure_torch(args):
 
 def init_env(args):
     """Initialize the environment."""
-    base_env = GymWrapper(gym.make('CartPole-v1', render_mode=None, new_step_api=True), new_step_api=True)
+    env = GymWrapper(gym.make('CartPole-v1', render_mode=None, new_step_api=True), new_step_api=True)
     if args.mode == "play":
-        env = PlayWrapper(args, base_env)
+        env = SelfPlayWrapper(args, env, new_step_api = True)
+        return PlayWrapper(args, env, new_step_api = True)
     elif args.mode == "self-play":
-        env = SelfPlayWrapper(args, base_env, new_step_api = True)
+        return SelfPlayWrapper(args, env, new_step_api = True)
     else:
-        env = base_env
-    return env
-    # return gym.wrappers.TimeLimit(env, max_episode_steps = args.num_steps, new_step_api=True)
+        return env
 
 def init_policy(args):
     if args.mode == 'play':
