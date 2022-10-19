@@ -26,7 +26,7 @@ class PlayWrapper(EnvWrapper):
     @property
     def num_actions(self):
         """Assuming discrete actions"""
-        return self.env.num_actions + 1
+        return self.env.num_actions
 
     @property
     def dim_actions(self):
@@ -62,18 +62,17 @@ class PlayWrapper(EnvWrapper):
         else:
             self.test_steps += 1
 
-
-        if action == self.num_actions - 1:
+        if action == self.args.no_op:
             self.playing = not self.playing
             self.stat['play_actions'] += 1
             #self.env.toggle_self_play(self.playing)
+            _, reward, term, trunc, info = self.env.step(action)
             obs = self.get_state()
-            reward = 4.0 * self.playing
-            return obs, reward, False, False, {}
+            reward += 1.0 * self.playing
         else:
             _, reward, term, trunc, info = self.env.step(action)
             obs = self.get_state()
-            return obs, reward, term, trunc, info
+        return obs, reward, term, trunc, info
 
     def render(self):
         obs = self.env.get_state()

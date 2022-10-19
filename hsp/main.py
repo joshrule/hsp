@@ -12,6 +12,14 @@ from multi_threading import ThreadedTrainer
 from play import PlayWrapper
 from self_play import SelfPlayWrapper, SPModel
 from trainer import ReinforceTrainer, SelfPlayTrainer, PlayTrainer
+from env_wrappers import NoOpCartPoleEnv
+from gym.envs.registration import register
+
+register(
+    id='NoOpCartPole-v0',
+    entry_point='env_wrappers:NoOpCartPoleEnv',
+    reward_threshold=500,
+)
 
 def init_arg_parser():
     """Initialize the argument parser."""
@@ -70,7 +78,8 @@ def configure_torch(args):
 
 def init_env(args):
     """Initialize the environment."""
-    base_env = gym.make('CartPole-v1', render_mode=None, new_step_api=True)
+    base_env = gym.make('NoOpCartPole-v0', render_mode=None, new_step_api=True)
+    args.no_op = 1
     gym_env = GymWrapper(base_env, new_step_api=True)
     env = ResetableTimeLimit(gym_env, max_episode_steps = args.max_steps, new_step_api = True)
     if args.mode == "play":
