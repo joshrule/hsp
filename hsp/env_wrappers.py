@@ -6,7 +6,6 @@ import gym
 from gym.spaces.utils import flatdim
 from gym.envs.classic_control import CartPoleEnv
 from gym.wrappers import TimeLimit
-from mazebase.torch_featurizers import GridFeaturizer
 from utils import merge_stat
 
 def torchify_obs(obs):

@@ -28,7 +28,7 @@ def init_arg_parser():
     parser.add_argument('--num_epochs', type=int, default=100, help='number of training epochs')
     parser.add_argument('--num_batches', type=int, default=10, help='number of batches per epoch')
     parser.add_argument('--num_steps', type=int, default=500, help='number of steps per batch (per thread)')
-    parser.add_argument('--num_threads', type=int, default=16, help='How many threads to run')
+    parser.add_argument('--num_threads', type=int, default=1, help='How many threads to run')
     parser.add_argument('--seed', type=int, default=0, help='random seed (might not work when nthreads > 0)')
     parser.add_argument('--lrate', type=float, default=0.001, help='learning rate')
     parser.add_argument('--reward_scale', type=float, default=1.0, help='scale reward before backprop')
