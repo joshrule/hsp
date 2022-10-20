@@ -54,7 +54,8 @@ class Trainer(object):
         stat['batch_reward'] = 0
         remaining_steps = self.args.num_steps
         while remaining_steps > 0:
-            episode, episode_reward = self.get_episode(remaining_steps)
+            max_episode_steps = min(self.args.max_steps,remaining_steps)
+            episode, episode_reward = self.get_episode(max_episode_steps)
             stat['num_episodes'] += 1
             stat['batch_reward'] += episode_reward
             batch += episode
