@@ -8,6 +8,8 @@ def parse_env_args(args, env):
         args.meta_dim = 3
         args.input_dim = env.env.env.observation_dim
         args.num_inputs = env.env.observation_dim
+        # We do this during play so that persistence isn't a limiting factor.
+        args.sp_persist = args.max_steps
     elif args.mode == "self-play":
         args.meta_dim = 2
         args.input_dim = env.env.observation_dim
