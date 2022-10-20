@@ -350,6 +350,8 @@ class SelfPlayWrapper(EnvWrapper):
             self.args.sp_persist - 1 > self.persist_count and
             # have started Bob at least once
             self.alice_last_state is not None and
+            # haven't run out of time: INVARIANT: assumes env has _max_episode_steps
+            self.current_time < self.env._max_episode_steps and
             # were successful if required
             not (self.args.sp_persist_success and not self.success) and
             # have finished Bob at least once (for separate persistence)
