@@ -165,6 +165,7 @@ class SelfPlayWrapper(EnvWrapper):
         self.success = None
         self.sp_state_thresh = 10 * self.args.sp_state_thresh_0
         self.alice_limit = 1
+        self.done = False
 
     @property
     def observation_dim(self):
@@ -217,8 +218,8 @@ class SelfPlayWrapper(EnvWrapper):
         self.display_obs.append(obs)
         self.env.render()
 
-    def reset(self, persist=False, self_play=True, **kwargs):
-        if persist or self._should_persist():
+    def reset(self, self_play=True, **kwargs):
+        if self._should_persist():
             if self.args.verbose > 0:
                 print(f"        PERSISTING: sub-episode {self.persist_count}")
             self.env.set_state(self.alice_last_state)
@@ -239,6 +240,7 @@ class SelfPlayWrapper(EnvWrapper):
             self.env.reset(**kwargs)
             self.persist_count = 0
             self.current_time = 0
+            self.done = False
         f = self.args.sp_state_thresh_factor
         self.sp_state_thresh *= f if self.success else 1/f
         if self.sp_state_thresh <= self.args.sp_state_thresh_1 and self.alice_limit < self.args.sp_steps:
@@ -300,6 +302,7 @@ class SelfPlayWrapper(EnvWrapper):
             self.stat['num_steps_test'] += 1
             self.stat['reward_test'] += reward
             if term or trunc:
+                self.done = True
                 self.stat['num_episodes_test'] += 1
             return self.get_state(), reward, term, trunc, info
 
@@ -331,10 +334,11 @@ class SelfPlayWrapper(EnvWrapper):
             self.stat['num_episodes_bob'] += 1
 
         if self.success and not (term or trunc):
-            self.reset(persist=True)
+            self.reset()
             if self.args.sp_persist > 0:
                 self.stat['persist_count'] = self.persist_count
 
+        self.done |= term | trunc
         obs = self.get_state()
         return obs, self.args.sp_reward_coef * reward, term, trunc, info
 
@@ -349,6 +353,7 @@ class SelfPlayWrapper(EnvWrapper):
 
     def _should_persist(self):
         return (
+            not self.done and
             # haven't run the requisite number of episodes
             self.args.sp_persist - 1 > self.persist_count and
             # have started Bob at least once
