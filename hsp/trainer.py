@@ -212,11 +212,11 @@ class SelfPlayTrainer(Trainer):
 
     def serialize_episode(self, t, reward, done, stat):
         if self.env.self_play:
-            ser = f"        total time: {t}, alice reward={stat['reward_alice']}, bob reward={stat['reward_bob']}"
+            ser = f"        total time: {t}, alice reward={stat['reward_alice']}, bob reward={stat['reward_bob']} total reward={reward}"
             if not self.env.success:
-                ser += f"\n        FAILED: best diff: {self.env.stat['best_diff_value']} vs {self.env.sp_state_thresh}, step {self.env.stat['best_diff_step']}"
+                ser = f"            FAILED: best diff: {self.env.stat['best_diff_value']} vs {self.env.sp_state_thresh}, step {self.env.stat['best_diff_step']}\n" + ser
         else:
-            ser = f"        total time: {t}, test reward={stat['reward_test']}"
+            ser = f"        total time: {t}, test reward={stat['reward_test']} total reward={reward}"
         return ser
 
     def _compute_misc(self, info):

@@ -134,7 +134,6 @@ class NoOpCartPoleEnv(CartPoleEnv):
         assert self.state is not None, "Call reset before using step method."
         x, x_dot, theta, theta_dot = self.state
         force = self.force_mag if action == 2 else -self.force_mag if action == 0 else 0
-        print(f"action: {action}, force: {force}")
         costheta = math.cos(theta)
         sintheta = math.sin(theta)
 
