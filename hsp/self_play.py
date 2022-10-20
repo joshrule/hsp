@@ -304,7 +304,7 @@ class SelfPlayWrapper(EnvWrapper):
             return self.get_state(), reward, term, trunc, info
 
         # Alice
-        term = self.current_time >= self.args.max_steps
+        term |= self.current_time >= self.args.max_steps
         if self.current_mind == 1:
             self.stat['num_steps_alice'] += 1
             if self.current_mind_time >= self.alice_limit:
