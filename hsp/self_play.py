@@ -271,8 +271,11 @@ class SelfPlayWrapper(EnvWrapper):
         if target == self.self_play:
             return
         self.self_play = not self.self_play if target is None else target
+        self.initial_state = self.env.get_state()
+        self.alice_last_state = None
+        self.success = False
         if self.self_play:
-            self.target_obs = self.env.get_state()
+            self.target_obs = self.initial_state
             self.current_mind = 1
             # Alice is only on during self-play, so mind_time resets.
             self.current_mind_time = 0
