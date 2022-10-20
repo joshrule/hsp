@@ -238,6 +238,7 @@ class SelfPlayWrapper(EnvWrapper):
                 print(f"        FULL RESET")
             self.env.reset(**kwargs)
             self.persist_count = 0
+            self.current_time = 0
         f = self.args.sp_state_thresh_factor
         self.sp_state_thresh *= f if self.success else 1/f
         if self.sp_state_thresh <= self.args.sp_state_thresh_1 and self.alice_limit < self.args.sp_steps:
@@ -248,7 +249,6 @@ class SelfPlayWrapper(EnvWrapper):
         self.stat['best_diff_step'] = np.inf
         self.alice_last_state = None
         self.initial_state = self.env.get_state() # bypass wrapper
-        self.current_time = 0
         self.current_mind_time = 0
         self.success = False
         self.display_obs = []
