@@ -10,7 +10,7 @@ from self_play import SPModel
 
 class PlayWrapper(EnvWrapper):
     def __init__(self, args, env, **kwargs):
-        super(PlayWrapper, self).__init__(env)
+        super(PlayWrapper, self).__init__(env, **kwargs)
         self.args = args
         self.steps = 0
         self.test_steps = 0
