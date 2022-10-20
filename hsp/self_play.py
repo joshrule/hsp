@@ -238,12 +238,12 @@ class SelfPlayWrapper(EnvWrapper):
                 print(f"        FULL RESET")
             self.env.reset(**kwargs)
             self.persist_count = 0
-            f = self.args.sp_state_thresh_factor
-            self.sp_state_thresh *= f if self.success else 1/f
-            if self.sp_state_thresh <= self.args.sp_state_thresh_1 and self.alice_limit < self.args.sp_steps:
-                print(f"\t\tincreasing alice_limit to {self.alice_limit} and resetting state_thresh from {self.sp_state_thresh:.4} to {(self.alice_limit + 1) * self.args.sp_state_thresh_0}")
-                self.alice_limit += 1
-                self.sp_state_thresh = self.alice_limit * self.args.sp_state_thresh_0
+        f = self.args.sp_state_thresh_factor
+        self.sp_state_thresh *= f if self.success else 1/f
+        if self.sp_state_thresh <= self.args.sp_state_thresh_1 and self.alice_limit < self.args.sp_steps:
+            print(f"\t\tincreasing alice_limit to {self.alice_limit} and resetting state_thresh from {self.sp_state_thresh:.4} to {(self.alice_limit + 1) * self.args.sp_state_thresh_0}")
+            self.alice_limit += 1
+            self.sp_state_thresh = self.alice_limit * self.args.sp_state_thresh_0
         self.stat['best_diff_value'] = np.inf
         self.stat['best_diff_step'] = np.inf
         self.alice_last_state = None
