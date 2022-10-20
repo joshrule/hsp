@@ -53,6 +53,7 @@ def init_arg_parser():
     parser.add_argument('--sp_persist_discount', default=1.0, type=float, help='discount coeff between persist episodes')
     parser.add_argument('--sp_persist_separate', default=False, action='store_true', help='keep Alice and Bob trajectory separate')
     parser.add_argument('--sp_persist_success', default=False, action='store_true', help='only persist if prev success')
+    parser.add_argument('--sp_reward_coef', default=0, type=float, help='coefficient by which base environment reward is multiplied')
     parser.add_argument('--sp_state_thresh_0', default=0, type=float, help='initial threshold of success for Bob')
     parser.add_argument('--sp_state_thresh_1', default=1, type=float, help='final threshold of success for Bob')
     parser.add_argument('--sp_state_thresh_factor', default=1, type=float, help='final threshold of success for Bob')

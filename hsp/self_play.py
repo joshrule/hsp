@@ -333,7 +333,7 @@ class SelfPlayWrapper(EnvWrapper):
                 self.stat['persist_count'] = self.persist_count
 
         obs = self.get_state()
-        return obs, 0, term, trunc, info
+        return obs, self.args.sp_reward_coef * reward, term, trunc, info
 
     def _get_bob_diff(self, obs, target):
         sp_state_mask = self.env.property_recursive('sp_state_mask')
