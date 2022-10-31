@@ -140,7 +140,7 @@ def visualize_policy(args, trainer):
             trainer.trainer.display = True
         else:
             trainer.display = True
-        trainer.get_episode()
+        trainer.get_episode(args.max_steps)
         if args.num_threads > 1:
             trainer.trainer.display = False
         else:
@@ -150,7 +150,8 @@ def run(args, policy, trainer):
     run_begin_time = time.time()
     reward = 0
     for epoch in range(args.num_epochs):
-        print(f'Begin Epoch {epoch}')
+        if args.verbose > 0:
+            print(f'Begin Epoch {epoch}')
         epoch_reward = 0
         epoch_steps = 0
         epoch_begin_time = time.time()
@@ -158,7 +159,8 @@ def run(args, policy, trainer):
             progress = progressbar.ProgressBar(max_value=args.num_batches, redirect_stdout=True).start()
 
         for n in range(args.num_batches):
-            print(f'    Begin Batch {n}')
+            if args.verbose > 1:
+                print(f'    Begin Batch {n}')
             batch_begin_time = time.time()
             if args.progress:
                 progress.update(n+1)
@@ -166,13 +168,15 @@ def run(args, policy, trainer):
             epoch_reward += stat['batch_reward']
             epoch_steps += stat['num_steps']
             batch_time = time.time() - batch_begin_time
-            print(f'    End Batch {n} (Reward: {stat["batch_reward"]:.2f}    Time: {batch_time:.2f}s    Steps: {stat["num_steps"]})')
+            if args.verbose > 1:
+                print(f'    End Batch {n} (Reward: {stat["batch_reward"]:.2f}    Time: {batch_time:.2f}s    Steps: {stat["num_steps"]})')
         if args.progress:
             progress.finish()
 
         epoch_time = time.time() - epoch_begin_time
         reward += epoch_reward
-        print(f'End Epoch {epoch} (Reward: {epoch_reward:.2f}    Time: {epoch_time:.2f}s    Steps: {epoch_steps})')
+        if args.verbose > 0:
+            print(f'End Epoch {epoch} (Reward: {epoch_reward:.2f}    Time: {epoch_time:.2f}s    Steps: {epoch_steps})')
 
         save(args, policy, trainer)
 

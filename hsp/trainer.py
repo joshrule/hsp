@@ -108,7 +108,7 @@ class Trainer(object):
             done = term or trunc
             mask = self._compute_mask(done, info)
 
-            if self.args.verbose > 1:
+            if self.args.verbose > 3:
                 print(self.serialize_step(t, step_reward, done, info))
 
             if self.display:
@@ -122,7 +122,7 @@ class Trainer(object):
         episode = self._postprocess_episode(episode)
         reward = sum(step.reward for step in episode)
 
-        if self.args.verbose > 0:
+        if self.args.verbose > 2:
             stat = self.env.get_stat() if hasattr(self.env, 'get_stat') else {}
             print(self.serialize_episode(t, reward, done, stat))
 
