@@ -20,6 +20,10 @@ register(
     entry_point='env_wrappers:NoOpCartPoleEnv',
     reward_threshold=500,
 )
+register(
+    id='GridWorld-v0',
+    entry_point='env_wrappers:GridWorldEnv',
+)
 
 def init_arg_parser():
     """Initialize the argument parser."""
@@ -79,8 +83,10 @@ def configure_torch(args):
 
 def init_env(args):
     """Initialize the environment."""
-    base_env = gym.make('NoOpCartPole-v0', render_mode=None, new_step_api=True)
-    args.no_op = 1
+    # base_env = gym.make('NoOpCartPole-v0', render_mode=None, new_step_api=True)
+    # args.no_op = 1
+    base_env = gym.make('GridWorld-v0', size=3, render_mode="human", new_step_api=True)
+    args.no_op = 0
     gym_env = GymWrapper(base_env, new_step_api=True)
     env = ResetableTimeLimit(gym_env, max_episode_steps = args.max_steps, new_step_api = True)
     if args.mode == "play":
