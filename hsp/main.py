@@ -24,6 +24,10 @@ register(
     id='GridWorld-v0',
     entry_point='env_wrappers:GridWorldEnv',
 )
+register(
+    id='Eat-v0',
+    entry_point='env_wrappers:EatEnv',
+)
 
 def init_arg_parser():
     """Initialize the argument parser."""
@@ -85,7 +89,7 @@ def init_env(args):
     """Initialize the environment."""
     # base_env = gym.make('NoOpCartPole-v0', render_mode=None, new_step_api=True)
     # args.no_op = 1
-    base_env = gym.make('GridWorld-v0', size=3, render_mode="human", new_step_api=True)
+    base_env = gym.make('Eat-v0', new_step_api=True)
     args.no_op = 0
     gym_env = GymWrapper(base_env, new_step_api=True)
     env = ResetableTimeLimit(gym_env, max_episode_steps = args.max_steps, new_step_api = True)
@@ -186,7 +190,8 @@ def run(args, policy, trainer):
 
         save(args, policy, trainer)
 
-        visualize_policy(args, trainer)
+        if epoch % 10 == 0:
+            visualize_policy(args, trainer)
     run_time = time.time() - run_begin_time
     print(f'End Run (Reward: {reward:.2f}    Time: {run_time:.2f}s)')
 

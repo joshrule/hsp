@@ -352,3 +352,59 @@ class GridWorldEnv(gym.Env):
         if self.window is not None:
             pygame.display.quit()
             pygame.quit()
+
+
+class EatEnv(gym.Env):
+    metadata = {"render_modes": [], "render_fps": 0}
+
+    def __init__(self, render_mode=None):
+        # Observations are dictionaries with the agent's and the target's location.
+        # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
+        self.observation_space = gym.spaces.Box(np.array([0.0]), np.array([200.0]), shape=(1,), dtype=float)
+        #self.observation_space = gym.spaces.Box(0, 1, shape=(3,), dtype=int)
+
+        # We have 2 actions, corresponding to "eat" and "rest".
+        self.action_space = gym.spaces.Discrete(2)
+
+        assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.render_mode = render_mode
+
+    def _get_obs(self):
+        return np.array([float(self._energy/200)])
+        # lt100 = 1 * (self._energy < 100)
+        # eq100 = 1 * (self._energy == 100)
+        # gt100 = 1 * (self._energy > 100)
+        # return np.array([lt100, eq100, gt100])
+
+    def _get_info(self):
+        return {}
+
+    def reset(self, seed=None, options=None, return_info=None, **kwargs):
+        # We need the following line to seed self.np_random.
+        super().reset(seed=seed, **kwargs)
+
+        self._energy = 100
+        self.current_time = 0
+
+        return self._get_obs()
+
+    def step(self, action):
+        self._energy += 1 if action == 1 else -1
+        self.current_time += 1
+
+        # An episode is done iff the agent has no energy.
+        terminated = 200 <= self._energy or self._energy <= 0
+        truncated = False
+        # reward = max(0,100-abs(100-self._energy))
+        reward = 1 if self._energy == 100 else 0
+        observation = self._get_obs()
+        info = self._get_info()
+        # print(f"        t: {self.current_time}, action: {action}, energy: {self._energy}, reward: {reward}")
+
+        return observation, reward, terminated, truncated, info
+
+    def render(self):
+        return None
+
+    def close(self):
+        pass
