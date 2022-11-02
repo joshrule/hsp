@@ -20,7 +20,7 @@ class Trainer(object):
         self.env = env
         self.display = False
         self.params = [p for p in policy_net.parameters() if p.requires_grad]
-        self.optimizer = optim.RMSprop(self.params, lr = args.lrate, alpha=0.97, eps=1e-6)
+        self.optimizer = optim.Adam(self.params, lr = args.lrate)
 
     def run_policy(self, state):
         raise NotImplementedError
