@@ -11,7 +11,9 @@ from env_wrappers import GymWrapper, ResetableTimeLimit
 from multi_threading import ThreadedTrainer
 from play import PlayWrapper
 from self_play import SelfPlayWrapper, SPModel
-from trainer import ReinforceTrainer, SelfPlayTrainer, PlayTrainer
+from trainer import SelfPlayRunner, PlayRunner
+from algorithms.reinforce import Reinforce
+from algorithms.vpg import VPG
 from env_wrappers import NoOpCartPoleEnv
 from gym.envs.registration import register
 
@@ -48,10 +50,14 @@ def init_arg_parser():
 
     # Model
     parser.add_argument('--hid_size', default=64, type=int, help='hidden layer size')
-    parser.add_argument('--mode', default='', type=str, help='model mode: play | self-play | reinforce')
+    parser.add_argument('--mode', default='', type=str, help='model mode: play | self-play | reinforce | vpg')
 
     # Environment
     parser.add_argument('--max_steps', default=20, type=int, help='forcibly end episode after this many steps')
+
+    # VPG
+    parser.add_argument('--vpg_gamma_r', type=float, default=0.99, help='discount factor between steps for rewards-to-go')
+    parser.add_argument('--vpg_gamma_a', type=float, default=0.95, help='additional discount factor between steps for advantages')
 
     # Self-Play
     parser.add_argument('--sp_goal_diff', default=False, action='store_true', help='encode goal as difference (e.g. g=enc(s*)-enc(s_t))')
@@ -115,14 +121,18 @@ def init_policy(args):
         p.data.share_memory_()
     return policy_net
 
-def init_trainer(args, policy_net):
+def init_runner(args, policy_net):
     """Initialize the trainer."""
     if args.mode == 'play':
-        f = lambda: PlayTrainer(args, policy_net, init_env(args))
+        #f = lambda: Reinforce(args, PlayRunner(args, policy_net, init_env(args)))
+        pass
     elif args.mode == 'self-play':
-        f = lambda: SelfPlayTrainer(args, policy_net, init_env(args))
-    else:
-        f = lambda: ReinforceTrainer(args, policy_net, init_env(args))
+        #f = lambda: Reinforce(args, SelfPlayRunner(args, policy_net, init_env(args)))
+        pass
+    elif args.mode == 'reinforce':
+        f = lambda: Reinforce(args, init_env(args))
+    elif args.mode == 'vpg':
+        f = lambda: VPG(args, init_env(args))
 
     if args.num_threads > 1:
         return ThreadedTrainer(args, f)
@@ -150,7 +160,7 @@ def visualize_policy(args, trainer):
             trainer.trainer.display = True
         else:
             trainer.display = True
-        trainer.get_episode(args.max_steps)
+        trainer.run_episode(args.max_steps)
         if args.num_threads > 1:
             trainer.trainer.display = False
         else:
@@ -175,11 +185,11 @@ def run(args, policy, trainer):
             if args.progress:
                 progress.update(n+1)
             stat = trainer.train_batch()
-            epoch_reward += stat['batch_reward']
+            epoch_reward += stat['reward']
             epoch_steps += stat['num_steps']
             batch_time = time.time() - batch_begin_time
             if args.verbose > 1:
-                print(f'    End Batch {n} (Reward: {stat["batch_reward"]:.2f}    Time: {batch_time:.2f}s    Steps: {stat["num_steps"]})')
+                print(f'    End Batch {n} (Reward: {stat["reward"]:.2f}    Time: {batch_time:.2f}s    Steps: {stat["num_steps"]}    Episodes: {len(stat["episodes"])})')
         if args.progress:
             progress.finish()
 
@@ -210,7 +220,7 @@ if __name__ == "__main__":
 
     policy_net = init_policy(args)
 
-    trainer = init_trainer(args, policy_net)
+    trainer = init_runner(args, policy_net)
 
     load(args, policy_net, trainer)
 

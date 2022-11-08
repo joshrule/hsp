@@ -9,8 +9,8 @@ from gym.envs.classic_control import CartPoleEnv
 from gym.wrappers import TimeLimit
 from utils import merge_stat
 
-def torchify_obs(obs):
-    return torch.from_numpy(obs).view(1, -1)
+def torchify(x):
+    return torch.from_numpy(x).view(1, -1)
 
 class EnvWrapper(gym.Wrapper):
     def __init__(self, env, **kwargs):
@@ -107,7 +107,7 @@ class GymWrapper(EnvWrapper):
         return False
 
     def get_state(self):
-        return torchify_obs(self.obs)
+        return torchify(self.obs)
 
     def set_state(self, state):
         self.env.unwrapped.state = state.numpy()[0]
@@ -122,7 +122,7 @@ class GymWrapper(EnvWrapper):
 
     def step(self, action):
         self.obs, reward, term, trunc, info = self.env.step(action)
-        return self.get_state(), reward, term, trunc, info
+        return self.get_state(), torchify(np.array(reward)), term, trunc, info
 
 class NoOpCartPoleEnv(CartPoleEnv):
     def __init__(self, **kwargs):
@@ -130,6 +130,8 @@ class NoOpCartPoleEnv(CartPoleEnv):
         self.action_space = gym.spaces.Discrete(3)
 
     def step(self, action):
+        if torch.is_tensor(action):
+            action = action.item()
         err_msg = f"{action!r} ({type(action)}) invalid"
         assert self.action_space.contains(action), err_msg
         assert self.state is not None, "Call reset before using step method."
@@ -360,7 +362,7 @@ class EatEnv(gym.Env):
     def __init__(self, render_mode=None):
         # Observations are dictionaries with the agent's and the target's location.
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
-        self.observation_space = gym.spaces.Box(np.array([0.0]), np.array([200.0]), shape=(1,), dtype=float)
+        self.observation_space = gym.spaces.Box(np.array([0.0]), np.array([1.0]), shape=(1,), dtype=float)
         #self.observation_space = gym.spaces.Box(0, 1, shape=(3,), dtype=int)
 
         # We have 2 actions, corresponding to "eat" and "rest".
@@ -371,10 +373,6 @@ class EatEnv(gym.Env):
 
     def _get_obs(self):
         return np.array([float(self._energy/200)])
-        # lt100 = 1 * (self._energy < 100)
-        # eq100 = 1 * (self._energy == 100)
-        # gt100 = 1 * (self._energy > 100)
-        # return np.array([lt100, eq100, gt100])
 
     def _get_info(self):
         return {}
@@ -395,11 +393,9 @@ class EatEnv(gym.Env):
         # An episode is done iff the agent has no energy.
         terminated = 200 <= self._energy or self._energy <= 0
         truncated = False
-        # reward = max(0,100-abs(100-self._energy))
         reward = 1 if self._energy == 100 else 0
         observation = self._get_obs()
         info = self._get_info()
-        # print(f"        t: {self.current_time}, action: {action}, energy: {self._energy}, reward: {reward}")
 
         return observation, reward, terminated, truncated, info
 
