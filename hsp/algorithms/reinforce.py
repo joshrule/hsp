@@ -136,7 +136,7 @@ class Reinforce(object):
                 break
             obs = step_obs
 
-        self.buffer.store_batch(self.args.vpg_gamma_r)
+        self.buffer.store_batch(self.args.gamma_r)
 
         if self.args.verbose > 2:
             try:

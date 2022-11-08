@@ -12,6 +12,7 @@ from multi_threading import ThreadedTrainer
 from play import PlayWrapper
 from self_play import SelfPlayWrapper, SPModel
 from trainer import SelfPlayRunner, PlayRunner
+from algorithms.ppo import PPO
 from algorithms.reinforce import Reinforce
 from algorithms.vpg import VPG
 from env_wrappers import NoOpCartPoleEnv
@@ -43,6 +44,10 @@ def init_arg_parser():
     parser.add_argument('--lrate', type=float, default=0.001, help='learning rate')
     parser.add_argument('--reward_scale', type=float, default=1.0, help='scale reward before backprop')
     parser.add_argument('--gamma', type=float, default=1.0, help='discount factor between steps')
+    parser.add_argument('--gamma_r', type=float, default=0.99, help='discount factor between steps for rewards-to-go')
+    parser.add_argument('--gamma_a', type=float, default=0.95, help='additional discount factor between steps for advantages')
+    parser.add_argument('--n_updates', type=int, default=10, help='how many gradient steps to take per PPO update')
+    parser.add_argument('--eps_clip', type=float, default=0.2, help='epsilon in PPO update')
     parser.add_argument('--normalize_rewards', action='store_true', default=False, help='normalize rewards in each batch')
     parser.add_argument('--value_coeff', type=float, default=0.05, help='coeff for value loss term')
     parser.add_argument('--entr', type=float, default=0, help='entropy regularization coeff')
@@ -50,14 +55,10 @@ def init_arg_parser():
 
     # Model
     parser.add_argument('--hid_size', default=64, type=int, help='hidden layer size')
-    parser.add_argument('--mode', default='', type=str, help='model mode: play | self-play | reinforce | vpg')
+    parser.add_argument('--mode', default='', type=str, help='model mode: play | self-play | reinforce | vpg | ppo')
 
     # Environment
     parser.add_argument('--max_steps', default=20, type=int, help='forcibly end episode after this many steps')
-
-    # VPG
-    parser.add_argument('--vpg_gamma_r', type=float, default=0.99, help='discount factor between steps for rewards-to-go')
-    parser.add_argument('--vpg_gamma_a', type=float, default=0.95, help='additional discount factor between steps for advantages')
 
     # Self-Play
     parser.add_argument('--sp_goal_diff', default=False, action='store_true', help='encode goal as difference (e.g. g=enc(s*)-enc(s_t))')
@@ -129,6 +130,8 @@ def init_runner(args, policy_net):
     elif args.mode == 'self-play':
         #f = lambda: Reinforce(args, SelfPlayRunner(args, policy_net, init_env(args)))
         pass
+    elif args.mode == 'ppo':
+        f = lambda: PPO(args, init_env(args))
     elif args.mode == 'reinforce':
         f = lambda: Reinforce(args, init_env(args))
     elif args.mode == 'vpg':

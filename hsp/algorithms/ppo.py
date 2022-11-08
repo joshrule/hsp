@@ -117,7 +117,7 @@ class Critic(nn.Module):
     def value(self, obs):
         return self(obs.double())[0].detach()
 
-class VPG(object):
+class PPO(object):
     def __init__(self, args, env):
         self.args = args
         self.env = env
@@ -203,18 +203,28 @@ class VPG(object):
     # only used when single threading
     def train_batch(self):
         record = self.run_batch()
+        record['actor_loss'] = []
+        record['critic_loss'] = []
 
-        self.optimizer_a.zero_grad()
-        loss_a, record['actor_loss'] = self.compute_actor_grad()
-        loss_a.backward()
-        if not self.args.freeze:
-            self.optimizer_a.step()
+        obs, acts, advs, rtgs, misc = self.buffer.get_batch()
 
-        self.optimizer_c.zero_grad()
-        loss_c, record['critic_loss'] = self.compute_critic_grad()
-        loss_c.backward()
-        if not self.args.freeze:
-            self.optimizer_c.step()
+        logp_old = self.actor.log_prob(obs, acts).reshape(-1, 1).detach()
+
+        for i in range(self.args.n_updates):
+
+            self.optimizer_a.zero_grad()
+            loss_a, record_a = self.compute_actor_grad(logp_old)
+            record['actor_loss'].append(record_a)
+            loss_a.backward()
+            if not self.args.freeze:
+                self.optimizer_a.step()
+
+            self.optimizer_c.zero_grad()
+            loss_c, record_c = self.compute_critic_grad()
+            record['critic_loss'].append(record_c)
+            loss_c.backward()
+            if not self.args.freeze:
+                self.optimizer_c.step()
 
         return record
 
@@ -228,14 +238,17 @@ class VPG(object):
 
         return loss, record
 
-    def compute_actor_grad(self):
+    def compute_actor_grad(self, logp_old):
         obs, acts, advs, rtgs, misc = self.buffer.get_batch()
 
-        # Get log-likelihoods of state-action pairs.
-        log_p = self.actor.log_prob(obs, acts).reshape(-1, 1)
+        logp = self.actor.log_prob(obs, acts).reshape(-1, 1)
 
-        # Loss maximizes likelihood*advantages.
-        loss = -tr.mean(advs * log_p)
+        ratio = tr.exp(logp - logp_old)
+
+        # PPO surrogate loss
+        surr1 = ratio * advs
+        surr2 = tr.clamp(ratio, 1-self.args.eps_clip, 1+self.args.eps_clip) * advs
+        loss = -tr.min(surr1, surr2).mean()
 
         record = {'loss': loss.item()}
 
