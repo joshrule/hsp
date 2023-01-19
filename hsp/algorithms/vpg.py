@@ -1,135 +1,107 @@
 import numpy as np
+import time
 import torch as tr
 import torch.nn as nn
-import torch.nn.functional as fn
 from torch import optim
-from torch.distributions import Categorical
+from algorithms.networks import MLPActorCritic
 from utils import *
 
 
-class Buffer(object):
-    def __init__(self):
-        self.reset()
+class Buffer:
+    """
+    A buffer for storing trajectories experienced by a VPG agent interacting
+    with the environment, and using Generalized Advantage Estimation (GAE-Lambda)
+    for calculating the advantages of state-action pairs.
+    """
 
-    def reset_episode(self):
-        self.ep_o, self.ep_a, self.ep_r, self.ep_v, self.ep_m = [], [], [], [], []
-        self.ep_l = 0
-
-    def reset_epoch(self):
-        self.obs_buf, self.acts_buf,self.advs_buf,self.rtgs_buf, self.misc_buf = [], [], [], [], []
-        self.total_eps = 0
-
-    def reset(self):
-        self.reset_epoch()
-        self.reset_episode()
-
-    def store_batch(self, critic, gamma_r, gamma_a):
-        """when episode is over, appends episode data to batch."""
-        ep_obs, ep_acts, ep_rews, ep_vals, ep_misc, ep_len = self.get_episode()
-
-        # Use GAE to get advantages.
-        died = ep_misc[-1]['term']
-        last_reward = ep_rews[-1]
-        last_obs = ep_obs[-1].double()
-        last_val = last_reward if died else critic.value(last_obs)
-
-        # Add last value to compute TD \gamma * V_{t+1} - V_{t}
-        ep_rews.append(last_val)
-        ep_vals.append(last_val)
-
-        # compute deltas for GAE
-        deltas = tensor(ep_rews[:-1]) + gamma_r * tensor(ep_vals[1:]) - tensor(ep_vals[:-1])
-
-        # Remove last value.
-        ep_rews = ep_rews[:-1]
-        ep_vals = ep_vals[:-1]
-
-        self.obs_buf += ep_obs
-        self.acts_buf += ep_acts
-        self.advs_buf += tensor(discount_cumsum(deltas.numpy(), gamma_r*gamma_a))
-        self.rtgs_buf += tensor(discount_cumsum(tensor(ep_rews).numpy(), gamma_r))
-        self.misc_buf += ep_misc
-        self.total_eps += 1
-
-    def get_batch(self):
-        # NOTE: for continuous action space reshape acts to [batch_size,1]
-        b_a = tensor(self.acts_buf).reshape(-1, 1)
-        b_o = tr.cat(self.obs_buf, dim=0)
-        # # normalize trick
-        b_adv_norm = (self.advs_buf - np.mean(self.advs_buf))/(np.std(self.advs_buf) + 1e-8)
-        b_adv = tensor(b_adv_norm).reshape(-1, 1)
-        b_rtg = tensor(self.rtgs_buf).reshape(-1, 1)
-        b_misc = self.misc_buf
-
-        return b_o, b_a, b_adv, b_rtg, b_misc
+    def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
+        self.obs_buf = np.zeros(combined_shape(size, obs_dim), dtype=np.float64)
+        self.act_buf = np.zeros(combined_shape(size, act_dim), dtype=np.float64)
+        self.adv_buf = np.zeros(size, dtype=np.float64)
+        self.rew_buf = np.zeros(size, dtype=np.float64)
+        self.ret_buf = np.zeros(size, dtype=np.float64)
+        self.val_buf = np.zeros(size, dtype=np.float64)
+        self.logp_buf = np.zeros(size, dtype=np.float64)
+        self.gamma, self.lam = gamma, lam
+        self.ptr, self.path_start_idx, self.max_size = 0, 0, size
 
     def __len__(self):
-        return len(self.obs_buf)
+        return self.ptr
 
-    def store_episode(self,o,a,r,v,info):
-        # lists of tensors
-        self.ep_o.append(o)
-        self.ep_a.append(a)
-        self.ep_r.append(r)
-        self.ep_v.append(v)
-        # list of dicts
-        self.ep_m.append(info)
-        # int
-        self.ep_l+=1
+    def store(self, obs, act, rew, val, logp):
+        """
+        Append one timestep of agent-environment interaction to the buffer.
+        """
+        assert self.ptr < self.max_size     # buffer has to have room so you can store
+        self.obs_buf[self.ptr] = obs
+        self.act_buf[self.ptr] = act
+        self.rew_buf[self.ptr] = rew
+        self.val_buf[self.ptr] = val
+        self.logp_buf[self.ptr] = logp
+        self.ptr += 1
 
-    def get_episode(self):
-        return self.ep_o,self.ep_a,self.ep_r,self.ep_v,self.ep_m,self.ep_l
+    def finish_path(self, last_val=0):
+        """
+        Call this at the end of a trajectory, or when one gets cut off
+        by an epoch ending. This looks back in the buffer to where the
+        trajectory started, and uses rewards and value estimates from
+        the whole trajectory to compute advantage estimates with GAE-Lambda,
+        as well as compute the rewards-to-go for each state, to use as
+        the targets for the value function.
 
-class Actor(nn.Module):
-    def __init__(self, obs_dim, h_dim, act_dim):
-        super(Actor, self).__init__()
-        self.act_dim = act_dim
-        self.layer1 = nn.Linear(obs_dim, h_dim)
-        self.layer2 = nn.Linear(h_dim, h_dim)
-        self.layer3 = nn.Linear(h_dim, act_dim)
+        The "last_val" argument should be 0 if the trajectory ended
+        because the agent reached a terminal state (died), and otherwise
+        should be V(s_T), the value function estimated for the last state.
+        This allows us to bootstrap the reward-to-go calculation to account
+        for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
+        """
 
-    def forward(self, x):
-        return fn.log_softmax(self.layer3(tr.tanh(self.layer2(tr.tanh(self.layer1(x.double()))))), dim=1)
+        path_slice = slice(self.path_start_idx, self.ptr)
+        rews = np.append(self.rew_buf[path_slice], last_val)
+        vals = np.append(self.val_buf[path_slice], last_val)
 
-    def act(self, obs):
-        return self.policy(obs.double())[0].detach()
+        # the next two lines implement GAE-Lambda advantage calculation
+        deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
+        self.adv_buf[path_slice] = discount_cumsum(deltas, self.gamma * self.lam)
 
-    def policy(self, x):
-        logits = self.forward(x.double())
-        act = Categorical(logits = logits).sample().unsqueeze(0)
-        return act
+        # the next line computes rewards-to-go, to be targets for the value function
+        self.ret_buf[path_slice] = discount_cumsum(rews, self.gamma)[:-1]
 
-    def log_prob(self, obs, acts):
-        one_hot_acts = (acts.reshape(-1,1).double() == tr.arange(self.act_dim).double()).double()
-        logp = tr.sum(one_hot_acts*self.forward(obs), 1)
-        return logp
+        self.path_start_idx = self.ptr
 
-class Critic(nn.Module):
-    def __init__(self, obs_dim, h_dim):
-        super(Critic, self).__init__()
-        self.layer1 = nn.Linear(obs_dim, h_dim)
-        self.layer2 = nn.Linear(h_dim, h_dim)
-        self.layer3 = nn.Linear(h_dim, 1)
+    def get(self):
+        """
+        Call this at the end of an epoch to get all of the data from
+        the buffer, with advantages appropriately normalized (shifted to have
+        mean zero and std one). Also, resets some pointers in the buffer.
+        """
+        assert self.ptr == self.max_size    # buffer has to be full before you can get
+        self.ptr, self.path_start_idx = 0, 0
+        # The next three lines implement the advantage normalization trick.
+        adv_mean = np.mean(self.adv_buf)
+        adv_std = np.std(self.adv_buf)
+        self.adv_buf = (self.adv_buf - adv_mean) / adv_std
+        data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
+                    adv=self.adv_buf, logp=self.logp_buf)
+        return {k: tr.as_tensor(v, dtype=tr.float64) for k,v in data.items()}
 
-    def forward(self, x):
-        return tr.relu(self.layer3(tr.tanh(self.layer2(tr.tanh(self.layer1(x.double()))))))
-
-    def value(self, obs):
-        return self(obs.double())[0].detach()
 
 class VPG(object):
-    def __init__(self, args, env):
+    def __init__(self, args, env, ac_kwargs=dict()):
+        obs_dim = env.observation_space.shape
+        act_dim = env.action_space.shape
+
         self.args = args
         self.env = env
-        self.actor = Actor(args.input_dim, args.hid_size, args.num_actions)
-        self.critic = Critic(args.input_dim, args.hid_size)
-        self.buffer = Buffer()
+        self.ac = MLPActorCritic(env.observation_space, env.action_space, **ac_kwargs)
+        print(f'Number of parameters: a: {count_vars(self.ac.pi)}, c: {count_vars(self.ac.v)}')
+        self.buffer = Buffer(obs_dim, act_dim, args.num_steps, args.gamma_r, args.gamma_a)
+        self.optimizer_a = optim.Adam(self.ac.pi.parameters(), lr=args.pi_lrate)
+        self.optimizer_c = optim.Adam(self.ac.v.parameters(), lr=args.v_lrate)
         self.display = False
-        self.optimizer_a = optim.Adam(self.actor.parameters(), lr = args.lrate)
-        self.optimizer_c = optim.Adam(self.critic.parameters(), lr = args.lrate)
 
     def serialize_step(self, record):
-        return f'            t={record["t"]}, reward={record["reward"]}, value={record["value"]} a={record["action"]}'
+        return f'            Time: {record["t"]}, Reward: {record["reward"]}, Value: {record["value"]}, Action: {record["action"]}'
 
     def serialize_episode(self, record):
         total_t = record['steps'][-1]['t']
@@ -137,7 +109,6 @@ class VPG(object):
         return f'        (Time: {total_t}, Reward: {total_r:.4f})'
 
     def run_episode(self, max_episode_steps):
-        self.buffer.reset_episode()
         record = {'steps': []}
 
         obs = self.env.reset(max_episode_steps = max_episode_steps)
@@ -146,9 +117,8 @@ class VPG(object):
             self.env.render()
 
         while True:
-            action = self.actor.act(obs.double())
-            val = self.critic.value(obs.double())
-            step_obs, step_reward, term, trunc, step = self.env.step(action)
+            action, v, logp = self.ac.step(tr.as_tensor(obs, dtype=tr.float64))
+            step_obs, step_reward, term, trunc, step = self.env.step(action.item())
             step.update({
                 'obs': obs,
                 'action': action.item(),
@@ -158,9 +128,8 @@ class VPG(object):
                 'trunc': trunc,
                 'done': term or trunc,
                 'reward': step_reward.item(),
-                'value': val.item(),
             })
-            self.buffer.store_episode(step_obs, action, step_reward, val, step)
+            self.buffer.store(obs, action, step_reward, v, logp)
             record['steps'].append(step)
 
             if self.args.verbose > 3:
@@ -169,11 +138,15 @@ class VPG(object):
             if self.display:
                 self.env.render()
 
-            if step['done']:
-                break
             obs = step_obs
 
-        self.buffer.store_batch(self.critic, self.args.gamma_r, self.args.gamma_a)
+            if step['done']:
+                # if trajectory didn't reach terminal state, bootstrap value target
+                v = 0 if term else self.ac.step(tr.as_tensor(obs, dtype=tr.float64))[1]
+                self.buffer.finish_path(v)
+                record['reward'] = sum(s['reward'] for s in record['steps'])
+                record['length'] = len(record['steps'])
+                break
 
         if self.args.verbose > 2:
             try:
@@ -184,12 +157,14 @@ class VPG(object):
 
         return record
 
-    def run_batch(self):
-        self.buffer.reset()
-        record = dict()
-        record['reward'] = 0
-        record['episodes'] = []
-        record['num_steps'] = 0
+    # only used when single threading
+    def run_epoch(self):
+        start = time.time()
+        record = dict(
+            reward = 0,
+            episodes = [],
+            num_steps = 0
+        )
         remaining_steps = self.args.num_steps
         while remaining_steps > 0:
             max_episode_steps = min(self.args.max_steps,remaining_steps)
@@ -198,45 +173,52 @@ class VPG(object):
             record['num_steps'] += len(episode['steps'])
             record['reward'] += sum(s['reward'] for s in episode['steps'])
             record['episodes'].append(episode)
+        record['time'] = time.time() - start
+
+        update_record = self.update()
+        record.update(update_record)
+
         return record
 
-    # only used when single threading
-    def train_batch(self):
-        record = self.run_batch()
+        # print(f"Epoch {epoch} Reward {np.mean(ep_rews):.2f} Episodes: {len(ep_lens)} + {steps_per_epoch - sum(ep_lens)} Time {total_time:.2f}s")
 
+    def update(self):
+        record = {}
+        data = self.buffer.get()
+
+        # Train policy with a single step of gradient descent
         self.optimizer_a.zero_grad()
-        loss_a, record['actor_loss'] = self.compute_actor_grad()
+        loss_a, record['actor_loss'] = self.compute_loss_a(data)
         loss_a.backward()
         if not self.args.freeze:
             self.optimizer_a.step()
 
-        self.optimizer_c.zero_grad()
-        loss_c, record['critic_loss'] = self.compute_critic_grad()
-        loss_c.backward()
-        if not self.args.freeze:
-            self.optimizer_c.step()
+        # Value function learning
+        for i in range(self.args.n_v_updates):
+            self.optimizer_c.zero_grad()
+            loss_c, record['critic_loss'] = self.compute_loss_c(data)
+            loss_c.backward()
+            if not self.args.freeze:
+                self.optimizer_c.step()
 
         return record
 
-    def compute_critic_grad(self):
-        obs, acts, advs, rtgs, misc = self.buffer.get_batch()
-        vals = self.critic(obs).flatten().reshape(-1, 1)
+    def compute_loss_a(self, data):
+        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
-        loss = tr.mean((rtgs-vals)**2)
+        # Loss
+        pi, logp = self.ac.pi(obs, act)
+        loss = -(logp * adv).mean()
 
-        record = {'loss': loss.item()}
+        # Useful extra info
+        approx_kl = (logp_old - logp).mean().item()
+        ent = pi.entropy().mean().item()
 
-        return loss, record
-
-    def compute_actor_grad(self):
-        obs, acts, advs, rtgs, misc = self.buffer.get_batch()
-
-        # Get log-likelihoods of state-action pairs.
-        log_p = self.actor.log_prob(obs, acts).reshape(-1, 1)
-
-        # Loss maximizes likelihood*advantages.
-        loss = -tr.mean(advs * log_p)
-
-        record = {'loss': loss.item()}
+        record = dict(kl=approx_kl, ent=ent, loss=loss)
 
         return loss, record
+
+    def compute_loss_c(self, data):
+        obs, ret = data['obs'], data['ret']
+        loss = ((self.ac.v(obs) - ret)**2).mean()
+        return loss, dict(loss=loss)

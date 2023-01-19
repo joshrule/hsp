@@ -3,8 +3,10 @@ import math
 from collections import namedtuple
 
 import numpy as np
+import scipy
 
 import torch as tr
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import time
@@ -88,6 +90,7 @@ def get_flat_grad_from(net, grad_grad=False):
     flat_grad = tr.cat(grads)
     return flat_grad
 
+
 class Timer:
     def __init__(self, msg, sync=False):
         self.msg = msg
@@ -101,6 +104,7 @@ class Timer:
         self.end = time.time()
         self.interval = self.end - self.start
         print("{}: {} s".format(self.msg, self.interval))
+
 
 def pca(X, k=2):
     X_mean = tr.mean(X, dim=0, keepdim=True)
@@ -118,19 +122,46 @@ def kl_criterion(mu, logvar):
     print(mu.mean().data[0], logvar.mean().data[0])
     return KLD
 
-def discount_cumsum(rews, gamma):
-    #print(f"rews: {rews}")
-    #print(f"gamma: {gamma}")
-    y = gamma**np.arange(len(rews))
-    #print(f"y: {y}")
-    gamma_mat=[np.roll(y, i, axis=0) for i in range(len(y))]
-    #print(f"gamma_mat: {gamma_mat}")
-    rews_mat = np.repeat([rews], [len(rews)], axis=0)
-    #print(f"rews_mat: {rews_mat}")
-    rews_mat = np.triu(rews_mat)*gamma_mat
-    #print(f"rews_mat: {rews_mat}")
-    #print(f"result: {np.sum(rews_mat, axis=1)}")
-    return np.sum(rews_mat, axis=1)
+
+def combined_shape(length, shape=None):
+    if shape is None:
+        return (length,)
+    return (length, shape) if np.isscalar(shape) else (length, *shape)
+
+
+def mlp(sizes, activation, output_activation=nn.Identity):
+    layers = []
+    for j in range(len(sizes)-1):
+        act = activation if j < len(sizes)-2 else output_activation
+        layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
+    return nn.Sequential(*layers)
+
+
+def count_vars(module):
+    return sum([np.prod(p.shape) for p in module.parameters()])
+
+
+def discount_cumsum(x, discount):
+    """
+    magic from rllab for computing discounted cumulative sums of vectors.
+
+    input:
+        vector x,
+        [x0,
+         x1,
+         x2]
+
+    output:
+        [x0 + discount * x1 + discount^2 * x2,
+         x1 + discount * x2,
+         x2]
+    """
+    return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
+
 
 def tensor(x):
-    return tr.tensor(x).double()
+    try:
+        y = x.clone().detach()
+    except:
+        y = tr.tensor(x)
+    return y.double()

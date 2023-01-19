@@ -1,16 +1,16 @@
 import argparse
 import gym
+import numpy as np
 import os
 import sys
 import time
 import torch
 import models
-import progressbar
 from action_utils import parse_env_args
 from env_wrappers import GymWrapper, ResetableTimeLimit
 from multi_threading import ThreadedTrainer
-from play import PlayWrapper
-from self_play import SelfPlayWrapper, SPModel
+# from play import PlayWrapper
+# from self_play import SelfPlayWrapper, SelfPlayPPO
 from trainer import SelfPlayRunner, PlayRunner
 from algorithms.ppo import PPO
 from algorithms.reinforce import Reinforce
@@ -41,13 +41,16 @@ def init_arg_parser():
     parser.add_argument('--num_steps', type=int, default=500, help='number of steps per batch (per thread)')
     parser.add_argument('--num_threads', type=int, default=1, help='How many threads to run')
     parser.add_argument('--seed', type=int, default=0, help='random seed (might not work when nthreads > 0)')
-    parser.add_argument('--lrate', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--pi_lrate', type=float, default=0.001, help='policy learning rate')
+    parser.add_argument('--v_lrate', type=float, default=0.001, help='value function learning rate')
     parser.add_argument('--reward_scale', type=float, default=1.0, help='scale reward before backprop')
     parser.add_argument('--gamma', type=float, default=1.0, help='discount factor between steps')
     parser.add_argument('--gamma_r', type=float, default=0.99, help='discount factor between steps for rewards-to-go')
     parser.add_argument('--gamma_a', type=float, default=0.95, help='additional discount factor between steps for advantages')
-    parser.add_argument('--n_updates', type=int, default=10, help='how many gradient steps to take per PPO update')
+    parser.add_argument('--n_v_updates', type=int, default=80, help='how many gradient steps to take per value function update')
+    parser.add_argument('--n_pi_updates', type=int, default=80, help='how many gradient steps to take per PPO update')
     parser.add_argument('--eps_clip', type=float, default=0.2, help='epsilon in PPO update')
+    parser.add_argument('--target_kl', type=float, default=0.01, help='target KL divergence used in PPO early stopping')
     parser.add_argument('--normalize_rewards', action='store_true', default=False, help='normalize rewards in each batch')
     parser.add_argument('--value_coeff', type=float, default=0.05, help='coeff for value loss term')
     parser.add_argument('--entr', type=float, default=0, help='entropy regularization coeff')
@@ -55,6 +58,7 @@ def init_arg_parser():
 
     # Model
     parser.add_argument('--hid_size', default=64, type=int, help='hidden layer size')
+    parser.add_argument('--l', default=2, type=int, help='number of hidden layers')
     parser.add_argument('--mode', default='', type=str, help='model mode: play | self-play | reinforce | vpg | ppo')
 
     # Environment
@@ -76,7 +80,6 @@ def init_arg_parser():
     parser.add_argument('--sp_test_rate', default=0, type=float, help='percentage of target task episodes')
 
     # Ergonomics
-    parser.add_argument('--progress', action='store_true', default=False, help='Display progress bar.')
     parser.add_argument('--display', action='store_true', default=False, help='Display episode from policy after each epoch.')
     parser.add_argument('--save', default='', type=str, help='save the model after training')
     parser.add_argument('--load', default='', type=str, help='load the model')
@@ -87,72 +90,58 @@ def init_arg_parser():
 def configure_torch(args):
     """Set parameters and random seeds for `torch`."""
     if args.seed >= 0:
+        #seed = args.seed + 10000 * os.getpid()
         torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
     torch.utils.backcompat.broadcast_warning.enabled = True
     torch.utils.backcompat.keepdim_warning.enabled = True
     torch.set_default_tensor_type('torch.DoubleTensor')
 
 def init_env(args):
     """Initialize the environment."""
-    # base_env = gym.make('NoOpCartPole-v0', render_mode=None, new_step_api=True)
-    # args.no_op = 1
-    base_env = gym.make('Eat-v0', new_step_api=True)
+    #base_env = gym.make('NoOpCartPole-v0', render_mode=None, new_step_api=True)
+    #args.no_op = 1
+    base_env = gym.make('CartPole-v1', render_mode=None, new_step_api=True)
+    # base_env = gym.make('Eat-v0', new_step_api=True)
     args.no_op = 0
     gym_env = GymWrapper(base_env, new_step_api=True)
     env = ResetableTimeLimit(gym_env, max_episode_steps = args.max_steps, new_step_api = True)
-    if args.mode == "play":
-        env = SelfPlayWrapper(args, env, new_step_api = True)
-        return PlayWrapper(args, env, new_step_api = True)
-    elif args.mode == "self-play":
-        return SelfPlayWrapper(args, env, new_step_api = True)
-    else:
-        return env
+    # if args.mode == "self-play":
+    #     return SelfPlayWrapper(args, env, new_step_api = True)
+    # elif args.mode == "play":
+    #     env = SelfPlayWrapper(args, env, new_step_api = True)
+    #     return PlayWrapper(args, env, new_step_api = True)
+    # else:
+    #     return env
+    return env
 
-def init_policy(args):
-    if args.mode == 'play':
-        policy_net = SPModel(args)
-    elif args.mode == 'self-play':
-        policy_net = SPModel(args)
-    else:
-        # REINFORCE with Multi-Layer Perceptron
-        policy_net = models.MLP(args)
-
-    # share parameters among threads, but not gradients
-    for p in policy_net.parameters():
-        p.data.share_memory_()
-    return policy_net
-
-def init_runner(args, policy_net):
+def init_runner(args):
     """Initialize the trainer."""
-    if args.mode == 'play':
-        #f = lambda: Reinforce(args, PlayRunner(args, policy_net, init_env(args)))
-        pass
-    elif args.mode == 'self-play':
-        #f = lambda: Reinforce(args, SelfPlayRunner(args, policy_net, init_env(args)))
-        pass
-    elif args.mode == 'ppo':
+    if args.mode == 'ppo':
         f = lambda: PPO(args, init_env(args))
     elif args.mode == 'reinforce':
-        f = lambda: Reinforce(args, init_env(args))
+        f = lambda: Reinforce(args, init_env(args), ac_kwargs=dict(hidden_sizes=[args.hid_size]*args.l))
     elif args.mode == 'vpg':
-        f = lambda: VPG(args, init_env(args))
+        f = lambda: VPG(args, init_env(args), ac_kwargs=dict(hidden_sizes=[args.hid_size]*args.l))
+    # elif args.mode == 'self-play':
+    #     f = lambda: SelfPlayPPO(args, init_env(args))
+    # elif args.mode == 'play':
+    #     #f = lambda: Reinforce(args, PlayRunner(args, policy_net, init_env(args)))
+    #     pass
 
     if args.num_threads > 1:
         return ThreadedTrainer(args, f)
     else:
         return f()
 
-def load(args, policy_net, trainer):
+def load(args, trainer):
     if args.load != '':
         d = torch.load(args.path)
-        policy_net.load_state_dict(d['policy_net'])
         trainer.load_state_dict(d['trainer'])
 
-def save(args, policy_net, trainer):
+def save(args, trainer):
     if args.save != '':
         d = dict()
-        d['policy_net'] = policy_net.state_dict()
-        # d['log'] = log
         d['trainer'] = trainer.state_dict()
         d['args'] = args
         torch.save(d, args.save)
@@ -169,46 +158,30 @@ def visualize_policy(args, trainer):
         else:
             trainer.display = False
 
-def run(args, policy, trainer):
+def run(args, trainer):
     run_begin_time = time.time()
-    reward = 0
     for epoch in range(args.num_epochs):
+        stat = trainer.run_epoch()
+        for ep in stat["episodes"]:
+            print(f"    length: {len(ep['steps'])} term: {ep['steps'][-1]['term']} trunc: {ep['steps'][-1]['trunc']}")
+        reward = stat["reward"]
+        mean_reward = np.mean([ep["reward"] for ep in stat["episodes"] if ep["steps"][-1]["term"] or (ep["steps"][-1]["trunc"] and len(ep["steps"]) == args.max_steps)])
+        episodes = sum(1 for ep in stat["episodes"] if ep["steps"][-1]["term"] or (ep["steps"][-1]["trunc"] and len(ep["steps"]) == args.max_steps))
+        remainder = sum(len(ep["steps"]) for ep in stat["episodes"] if not (ep["steps"][-1]["term"] or (ep["steps"][-1]["trunc"] and len(ep["steps"]) == args.max_steps)))
+        num_steps = stat["num_steps"]
+        epoch_time = stat["time"]
+
         if args.verbose > 0:
-            print(f'Begin Epoch {epoch}')
-        epoch_reward = 0
-        epoch_steps = 0
-        epoch_begin_time = time.time()
-        if args.progress:
-            progress = progressbar.ProgressBar(max_value=args.num_batches, redirect_stdout=True).start()
+            print(f'Epoch: {epoch} Reward: {mean_reward:.2f} ({reward:.2f})    Episodes: {episodes} ({remainder})    Time: {epoch_time:.2f}s    Steps: {num_steps}', flush = True)
 
-        for n in range(args.num_batches):
-            if args.verbose > 1:
-                print(f'    Begin Batch {n}')
-            batch_begin_time = time.time()
-            if args.progress:
-                progress.update(n+1)
-            stat = trainer.train_batch()
-            epoch_reward += stat['reward']
-            epoch_steps += stat['num_steps']
-            batch_time = time.time() - batch_begin_time
-            if args.verbose > 1:
-                print(f'    End Batch {n} (Reward: {stat["reward"]:.2f}    Time: {batch_time:.2f}s    Steps: {stat["num_steps"]}    Episodes: {len(stat["episodes"])})')
-        if args.progress:
-            progress.finish()
-
-        epoch_time = time.time() - epoch_begin_time
-        reward += epoch_reward
-        if args.verbose > 0:
-            print(f'End Epoch {epoch} (Reward: {epoch_reward:.2f}    Time: {epoch_time:.2f}s    Steps: {epoch_steps})')
-
-        save(args, policy, trainer)
+        save(args, trainer)
 
         if epoch % 10 == 0:
             visualize_policy(args, trainer)
     run_time = time.time() - run_begin_time
-    print(f'End Run (Reward: {reward:.2f}    Time: {run_time:.2f}s)')
+    print(f'Run completed in {run_time:.2f}s.')
 
-    return policy, trainer
+    return trainer
 
 if __name__ == "__main__":
     parser = init_arg_parser()
@@ -221,15 +194,13 @@ if __name__ == "__main__":
     parse_env_args(args, env)
     print(args, end="\n\n")
 
-    policy_net = init_policy(args)
+    trainer = init_runner(args)
 
-    trainer = init_runner(args, policy_net)
+    load(args, trainer)
 
-    load(args, policy_net, trainer)
+    trainer = run(args, trainer)
 
-    policy_net, trainer = run(args, policy_net, trainer)
-
-    save(args, policy_net, trainer)
+    save(args, trainer)
 
     if sys.flags.interactive == 0 and args.num_threads > 1:
         trainer.quit()
