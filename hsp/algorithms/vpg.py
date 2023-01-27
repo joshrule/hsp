@@ -220,5 +220,8 @@ class VPG(object):
 
     def compute_loss_c(self, data):
         obs, ret = data['obs'], data['ret']
-        loss = ((self.ac.v(obs) - ret)**2).mean()
+        v = self.ac.v(obs)
+        v.sub_(ret)
+        v.square_()
+        loss = v.mean()
         return loss, dict(loss=loss)

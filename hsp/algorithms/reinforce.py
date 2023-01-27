@@ -180,8 +180,6 @@ class Reinforce(object):
 
         return record
 
-        # print(f"Epoch {epoch} Reward {np.mean(ep_rews):.2f} Episodes: {len(ep_lens)} + {steps_per_epoch - sum(ep_lens)} Time {total_time:.2f}s")
-
     def update(self):
         record = {}
         data = self.buffer.get()
@@ -206,10 +204,6 @@ class Reinforce(object):
     def compute_loss_a(self, data):
         obs, act, rtgs, logp_old = data['obs'], data['act'], data['ret'], data['logp']
 
-        # # TODO: Is normalizing helpful?
-        # rtgs -= tr.mean(rtgs)
-        # rtgs /= tr.std(rtgs)
-
         # Loss
         pi, logp = self.ac.pi(obs, act)
         loss = -(logp * rtgs).mean()
@@ -218,11 +212,14 @@ class Reinforce(object):
         approx_kl = (logp_old - logp).mean().item()
         ent = pi.entropy().mean().item()
 
-        record = dict(kl=approx_kl, ent=ent, loss=loss)
+        record = dict(kl=approx_kl, ent=ent, loss=loss.item())
 
         return loss, record
 
     def compute_loss_c(self, data):
         obs, ret = data['obs'], data['ret']
-        loss = ((self.ac.v(obs) - ret)**2).mean()
-        return loss, dict(loss=loss)
+        v = self.ac.v(obs)
+        v.sub_(ret)
+        v.square_()
+        loss = v.mean()
+        return loss, dict(loss=loss.item())

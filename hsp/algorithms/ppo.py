@@ -106,7 +106,7 @@ class PPO(object):
     def serialize_episode(self, record):
         total_t = record['steps'][-1]['t']
         total_r = sum(s["reward"] for s in record['steps'])
-        return f'        (Time: {total_t}, Reward: {total_r:.4f})'
+        return f'        Time: {total_t}, Reward: {total_r:.4f}'
 
     def run_episode(self, max_episode_steps):
         record = {'steps': []}
@@ -180,17 +180,16 @@ class PPO(object):
 
         return record
 
-        # print(f"Epoch {epoch} Reward {np.mean(ep_rews):.2f} Episodes: {len(ep_lens)} + {steps_per_epoch - sum(ep_lens)} Time {total_time:.2f}s")
-
     def update(self):
-        record = {}
+        record = dict(actor_loss = [], critic_loss = [])
         data = self.buffer.get()
 
         # Train policy with multiple steps of gradient descent
         for i in range(self.args.n_pi_updates):
             self.optimizer_a.zero_grad()
-            loss_a, record['actor_loss'] = self.compute_loss_a(data)
-            if record['actor_loss']['kl'] > 1.5 * self.args.target_kl:
+            loss_a, record_a = self.compute_loss_a(data)
+            record['actor_loss'].append(record_a)
+            if record['actor_loss'][-1]['kl'] > 1.5 * self.args.target_kl:
                 if self.args.verbose > 2:
                     print(f'# Early stopping at step {i} due to reaching max kl.')
                 break
@@ -201,7 +200,8 @@ class PPO(object):
         # Value function learning
         for i in range(self.args.n_v_updates):
             self.optimizer_c.zero_grad()
-            loss_c, record['critic_loss'] = self.compute_loss_c(data)
+            loss_c, record_c = self.compute_loss_c(data)
+            record['critic_loss'].append(record_c)
             loss_c.backward()
             if not self.args.freeze:
                 self.optimizer_c.step()
@@ -229,5 +229,8 @@ class PPO(object):
 
     def compute_loss_c(self, data):
         obs, ret = data['obs'], data['ret']
-        loss = ((self.ac.v(obs) - ret)**2).mean()
+        v = self.ac.v(obs)
+        v.sub_(ret)
+        v.square_()
+        loss = v.mean()
         return loss, dict(loss=loss)

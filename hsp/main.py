@@ -90,9 +90,11 @@ def init_arg_parser():
 def configure_torch(args):
     """Set parameters and random seeds for `torch`."""
     if args.seed >= 0:
-        #seed = args.seed + 10000 * os.getpid()
         torch.manual_seed(args.seed)
         np.random.seed(args.seed)
+    # If we're just testing, let's not take over the entire machine.
+    if args.num_threads == 1:
+        torch.set_num_threads(1)
     torch.utils.backcompat.broadcast_warning.enabled = True
     torch.utils.backcompat.keepdim_warning.enabled = True
     torch.set_default_tensor_type('torch.DoubleTensor')
@@ -102,8 +104,9 @@ def init_env(args):
     #base_env = gym.make('NoOpCartPole-v0', render_mode=None, new_step_api=True)
     #args.no_op = 1
     base_env = gym.make('CartPole-v1', render_mode=None, new_step_api=True)
-    # base_env = gym.make('Eat-v0', new_step_api=True)
     args.no_op = 0
+    # base_env = gym.make('Eat-v0', new_step_api=True)
+    # args.no_op = 0
     gym_env = GymWrapper(base_env, new_step_api=True)
     env = ResetableTimeLimit(gym_env, max_episode_steps = args.max_steps, new_step_api = True)
     # if args.mode == "self-play":
