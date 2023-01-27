@@ -10,8 +10,8 @@ from action_utils import parse_env_args
 from env_wrappers import GymWrapper, ResetableTimeLimit
 from multi_threading import ThreadedTrainer
 # from play import PlayWrapper
-# from self_play import SelfPlayWrapper, SelfPlayPPO
-from trainer import SelfPlayRunner, PlayRunner
+from self_play import SelfPlayWrapper, SelfPlayPPO
+# from trainer import SelfPlayRunner, PlayRunner
 from algorithms.ppo import PPO
 from algorithms.reinforce import Reinforce
 from algorithms.vpg import VPG
@@ -50,7 +50,7 @@ def init_arg_parser():
     parser.add_argument('--n_v_updates', type=int, default=80, help='how many gradient steps to take per value function update')
     parser.add_argument('--n_pi_updates', type=int, default=80, help='how many gradient steps to take per PPO update')
     parser.add_argument('--eps_clip', type=float, default=0.2, help='epsilon in PPO update')
-    parser.add_argument('--target_kl', type=float, default=0.01, help='target KL divergence used in PPO early stopping')
+    parser.add_argument('--target_kl', type=float, default=0.05, help='target KL divergence used in PPO early stopping')
     parser.add_argument('--normalize_rewards', action='store_true', default=False, help='normalize rewards in each batch')
     parser.add_argument('--value_coeff', type=float, default=0.05, help='coeff for value loss term')
     parser.add_argument('--entr', type=float, default=0, help='entropy regularization coeff')
@@ -92,6 +92,9 @@ def configure_torch(args):
     if args.seed >= 0:
         torch.manual_seed(args.seed)
         np.random.seed(args.seed)
+        # seed = (args.seed + 10000 * os.getpid()) % (2 ** 32 - 1)
+        # torch.manual_seed(seed)
+        # np.random.seed(seed)
     # If we're just testing, let's not take over the entire machine.
     if args.num_threads == 1:
         torch.set_num_threads(1)
@@ -109,25 +112,24 @@ def init_env(args):
     # args.no_op = 0
     gym_env = GymWrapper(base_env, new_step_api=True)
     env = ResetableTimeLimit(gym_env, max_episode_steps = args.max_steps, new_step_api = True)
-    # if args.mode == "self-play":
-    #     return SelfPlayWrapper(args, env, new_step_api = True)
+    if args.mode == "self-play":
+        return SelfPlayWrapper(args, env, new_step_api = True)
     # elif args.mode == "play":
     #     env = SelfPlayWrapper(args, env, new_step_api = True)
     #     return PlayWrapper(args, env, new_step_api = True)
-    # else:
-    #     return env
-    return env
+    else:
+        return env
 
 def init_runner(args):
     """Initialize the trainer."""
-    if args.mode == 'ppo':
-        f = lambda: PPO(args, init_env(args))
-    elif args.mode == 'reinforce':
+    if args.mode == 'reinforce':
         f = lambda: Reinforce(args, init_env(args), ac_kwargs=dict(hidden_sizes=[args.hid_size]*args.l))
     elif args.mode == 'vpg':
         f = lambda: VPG(args, init_env(args), ac_kwargs=dict(hidden_sizes=[args.hid_size]*args.l))
-    # elif args.mode == 'self-play':
-    #     f = lambda: SelfPlayPPO(args, init_env(args))
+    elif args.mode == 'ppo':
+        f = lambda: PPO(args, init_env(args))
+    elif args.mode == 'self-play':
+        f = lambda: SelfPlayPPO(args, init_env(args))
     # elif args.mode == 'play':
     #     #f = lambda: Reinforce(args, PlayRunner(args, policy_net, init_env(args)))
     #     pass
@@ -165,17 +167,18 @@ def run(args, trainer):
     run_begin_time = time.time()
     for epoch in range(args.num_epochs):
         stat = trainer.run_epoch()
-        for ep in stat["episodes"]:
-            print(f"    length: {len(ep['steps'])} term: {ep['steps'][-1]['term']} trunc: {ep['steps'][-1]['trunc']}")
         reward = stat["reward"]
+        alice_reward = np.mean([ep['env'].get('reward_alice', 0) for ep in stat["episodes"]])
+        bob_reward = np.mean([ep['env'].get('reward_bob', 0) for ep in stat["episodes"]])
         mean_reward = np.mean([ep["reward"] for ep in stat["episodes"] if ep["steps"][-1]["term"] or (ep["steps"][-1]["trunc"] and len(ep["steps"]) == args.max_steps)])
         episodes = sum(1 for ep in stat["episodes"] if ep["steps"][-1]["term"] or (ep["steps"][-1]["trunc"] and len(ep["steps"]) == args.max_steps))
         remainder = sum(len(ep["steps"]) for ep in stat["episodes"] if not (ep["steps"][-1]["term"] or (ep["steps"][-1]["trunc"] and len(ep["steps"]) == args.max_steps)))
+        mean_diff = np.mean([s["diff"] for ep in stat["episodes"] for s in ep['steps'] if s.get('diff', None) != None])
         num_steps = stat["num_steps"]
         epoch_time = stat["time"]
 
         if args.verbose > 0:
-            print(f'Epoch: {epoch} Reward: {mean_reward:.2f} ({reward:.2f})    Episodes: {episodes} ({remainder})    Time: {epoch_time:.2f}s    Steps: {num_steps}', flush = True)
+            print(f'E: {epoch} R: {mean_reward:.2f} ({reward}) A: {alice_reward:.3f}  B: {bob_reward:.3f} Ep: {episodes} ({remainder}) T: {epoch_time:.2f}s S: {num_steps} D: {mean_diff:.4}', flush = True)
 
         save(args, trainer)
 
