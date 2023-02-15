@@ -1,16 +1,9 @@
-import torch.nn as nn
-from torch.autograd import Variable
 from utils import *
-from models import MLP
-import random
-from argparse import Namespace
-import action_utils
 from env_wrappers import *
-from self_play import SPModel
 
 class PlayWrapper(EnvWrapper):
     def __init__(self, args, env, **kwargs):
-        super(PlayWrapper, self).__init__(env, **kwargs)
+        super().__init__(env, **kwargs)
         self.args = args
         self.steps = 0
         self.test_steps = 0
@@ -57,18 +50,16 @@ class PlayWrapper(EnvWrapper):
     def step(self, action):
         # Time management
         self.steps += 1
-        if self.playing:
-            self.play_steps += 1
-        else:
-            self.test_steps += 1
+        self.play_steps += 1 * self.playing
+        self.test_steps += 1 * (not self.playing)
 
+        # NOTE: Don't reward play naively, or agent learns to turn play on and off for reward.
         if action == self.args.no_op:
             self.playing = not self.playing
             self.stat['play_actions'] += 1
             self.env.toggle_self_play(self.playing)
             _, reward, term, trunc, info = self.env.step(action)
             obs = self.get_state()
-            reward += 1.0 * self.playing
         else:
             _, reward, term, trunc, info = self.env.step(action)
             obs = self.get_state()

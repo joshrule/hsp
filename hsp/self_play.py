@@ -478,7 +478,6 @@ class SelfPlayWrapper(EnvWrapper):
         self.args = args
         self.total_steps = 0
         self.total_test_steps = 0
-        self.persist_count = self.args.sp_persist
         self.success = None
         self.sp_state_thresh = 5 * self.args.sp_state_thresh_0
         self.alice_limit = 1
@@ -536,29 +535,19 @@ class SelfPlayWrapper(EnvWrapper):
         self.env.render()
 
     def reset(self, self_play=True, **kwargs):
-        if self._should_persist():
-            print(f"{self.current_time} < {self.env._max_episode_steps}")
-            if self.args.verbose > 1:
-                print(f"        PERSISTING: sub-episode {self.persist_count + 1} {self._should_persist()}")
-            self.env.set_state(self.alice_last_state)
-            self.persist_count += 1
-        else:
-            self.stat = dict()
-            self.stat['reward_test'] = 0
-            self.stat['reward_alice'] = 0
-            self.stat['reward_bob'] = 0
-            self.stat['num_steps_test'] = 0
-            self.stat['num_steps_alice'] = 0
-            self.stat['num_steps_bob'] = 0
-            self.stat['num_episodes_test'] = 0
-            self.stat['num_episodes_alice'] = 0
-            self.stat['num_episodes_bob'] = 0
-            # if self.args.verbose > 1:
-            #     print(f"        FULL RESET")
-            self.env.reset(**kwargs)
-            self.persist_count = 0
-            self.current_time = 0
-            self.done = False
+        self.stat = dict()
+        self.stat['reward_test'] = 0
+        self.stat['reward_alice'] = 0
+        self.stat['reward_bob'] = 0
+        self.stat['num_steps_test'] = 0
+        self.stat['num_steps_alice'] = 0
+        self.stat['num_steps_bob'] = 0
+        self.stat['num_episodes_test'] = 0
+        self.stat['num_episodes_alice'] = 0
+        self.stat['num_episodes_bob'] = 0
+        self.env.reset(**kwargs)
+        self.current_time = 0
+        self.done = False
         f = self.args.sp_state_thresh_factor
         self.sp_state_thresh *= f if self.success else 1/f
         if self.sp_state_thresh <= self.args.sp_state_thresh_1 and self.alice_limit < self.args.sp_steps:
@@ -634,8 +623,6 @@ class SelfPlayWrapper(EnvWrapper):
                 self.stat['num_episodes_test'] += 1
             info['mask'] = 0 if (term or trunc) else 1
             info['mind'] = self.current_mind
-            if self.args.sp_persist > 0:
-                info['sp_persist_count'] = self.persist_count
             return self.get_state(), reward, term, trunc, info
             # NOTE: a hacky reward structure for testing Bob
             # return self.get_state(), 1.0 * self.success, term, trunc, info
@@ -663,7 +650,7 @@ class SelfPlayWrapper(EnvWrapper):
             print(f"                diff {diff}, sp_state_thresh {self.sp_state_thresh}")
             if bool(diff <= self.sp_state_thresh):
                 self.success = True
-                term = not self._should_persist()
+                term = True
                 print(f"            SUCCESS: best diff: {self.stat['best_diff_value']} vs {self.sp_state_thresh}, step {self.stat['best_diff_step']}")
 
         if self.success or term:
@@ -675,8 +662,6 @@ class SelfPlayWrapper(EnvWrapper):
         # Success
         if self.success and not (term or trunc):
             self.reset()
-            if self.args.sp_persist > 0:
-                self.stat['persist_count'] = self.persist_count
 
         # Failure
         if not self.success and (term or trunc):
@@ -686,8 +671,6 @@ class SelfPlayWrapper(EnvWrapper):
         obs = self.get_state()
         info['mask'] = 0 if info.get('sp_switched') else 0 if (term or trunc) else 1
         info['mind'] = self.current_mind
-        if self.args.sp_persist > 0:
-            info['sp_persist_count'] = self.persist_count
         return obs, self.args.sp_reward_coef * reward, term, trunc, info
 
     def _get_bob_diff(self, obs, target):
@@ -699,21 +682,6 @@ class SelfPlayWrapper(EnvWrapper):
             diff = tr.dist(target, obs)
         return diff
 
-    def _should_persist(self):
-        return (
-            not self.done and
-            # haven't run the requisite number of episodes
-            self.args.sp_persist - 1 > self.persist_count and
-            # have started Bob at least once
-            self.alice_last_state is not None and
-            # haven't run out of time: INVARIANT: assumes env has _max_episode_steps
-            self.current_time < self.env._max_episode_steps and
-            # were successful if required
-            not (self.args.sp_persist_success and not self.success) and
-            # have finished Bob at least once (for separate persistence)
-            not (self.args.sp_persist_separate and self.bob_last_state is None)
-        )
-
     def _switch_mind(self):
         self.current_mind_time = 0
         self.alice_last_state = self.env.get_state()
@@ -723,12 +691,8 @@ class SelfPlayWrapper(EnvWrapper):
             pass
         elif self.args.sp_mode == 'repeat':
             self.target_obs = self.env.get_state()
-            if self.persist_count > 0 and self.args.sp_persist_separate:
-                # start Bob from his previous state.
-                self.env.set_state(self.bob_last_state)
-            else:
-                # start Bob from the/Alice's initial state.
-                self.env.set_state(self.initial_state)
+            # start Bob from the/Alice's initial state.
+            self.env.set_state(self.initial_state)
         else:
             raise RuntimeError("Invalid sp_mode")
 

@@ -9,7 +9,7 @@ import models
 from action_utils import parse_env_args
 from env_wrappers import GymWrapper, ResetableTimeLimit
 from multi_threading import ThreadedTrainer
-# from play import PlayWrapper
+from play import PlayWrapper
 from self_play import SelfPlayWrapper, SelfPlayPPO
 # from trainer import SelfPlayRunner, PlayRunner
 from algorithms.ppo import PPO
@@ -68,10 +68,6 @@ def init_arg_parser():
     parser.add_argument('--sp_goal_diff', default=False, action='store_true', help='encode goal as difference (e.g. g=enc(s*)-enc(s_t))')
     parser.add_argument('--sp_goal_dim', default=2, type=int, help='goal representation dimension')
     parser.add_argument('--sp_mode', default='reverse', type=str, help='self-play mode: reverse | repeat')
-    parser.add_argument('--sp_persist', default=0, type=int, help='start next self-play episode from previous one for K episodes')
-    parser.add_argument('--sp_persist_discount', default=1.0, type=float, help='discount coeff between persist episodes')
-    parser.add_argument('--sp_persist_separate', default=False, action='store_true', help='keep Alice and Bob trajectory separate')
-    parser.add_argument('--sp_persist_success', default=False, action='store_true', help='only persist if prev success')
     parser.add_argument('--sp_reward_coef', default=0, type=float, help='coefficient by which base environment reward is multiplied')
     parser.add_argument('--sp_state_thresh_0', default=0, type=float, help='initial threshold of success for Bob')
     parser.add_argument('--sp_state_thresh_1', default=1, type=float, help='final threshold of success for Bob')
@@ -104,19 +100,19 @@ def configure_torch(args):
 
 def init_env(args):
     """Initialize the environment."""
-    #base_env = gym.make('NoOpCartPole-v0', render_mode=None, new_step_api=True)
-    #args.no_op = 1
-    base_env = gym.make('CartPole-v1', render_mode=None, new_step_api=True)
-    args.no_op = 0
+    base_env = gym.make('NoOpCartPole-v0', render_mode=None, new_step_api=True)
+    args.no_op = 1
+    #base_env = gym.make('CartPole-v1', render_mode=None, new_step_api=True)
+    #args.no_op = 0
     # base_env = gym.make('Eat-v0', new_step_api=True)
     # args.no_op = 0
     gym_env = GymWrapper(base_env, new_step_api=True)
     env = ResetableTimeLimit(gym_env, max_episode_steps = args.max_steps, new_step_api = True)
     if args.mode == "self-play":
         return SelfPlayWrapper(args, env, new_step_api = True)
-    # elif args.mode == "play":
-    #     env = SelfPlayWrapper(args, env, new_step_api = True)
-    #     return PlayWrapper(args, env, new_step_api = True)
+    elif args.mode == "play":
+        env = SelfPlayWrapper(args, env, new_step_api = True)
+        return PlayWrapper(args, env, new_step_api = True)
     else:
         return env
 
@@ -130,9 +126,8 @@ def init_runner(args):
         f = lambda: PPO(args, init_env(args))
     elif args.mode == 'self-play':
         f = lambda: SelfPlayPPO(args, init_env(args))
-    # elif args.mode == 'play':
-    #     #f = lambda: Reinforce(args, PlayRunner(args, policy_net, init_env(args)))
-    #     pass
+    elif args.mode == 'play':
+        f = lambda: SelfPlayPPO(args, init_env(args))
 
     if args.num_threads > 1:
         return ThreadedTrainer(args, f)
