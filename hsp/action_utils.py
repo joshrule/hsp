@@ -8,6 +8,7 @@ def parse_env_args(args, env):
         args.meta_dim = 3
         args.input_dim = env.env.env.observation_dim
         args.num_inputs = env.observation_dim
+        args.sp_reward_coef = min(1, args.sp_reward_coef)
     elif args.mode == "self-play":
         args.meta_dim = 2
         args.input_dim = env.env.observation_dim
@@ -16,7 +17,6 @@ def parse_env_args(args, env):
         args.meta_dim = 0
         args.input_dim = env.observation_dim
         args.num_inputs = args.input_dim
-    print(f"computing input dim as {args.input_dim} and num_inputs as {args.num_inputs} for env of {type(env)}")
     if env.num_actions > 0:
         # environment takes discrete action
         args.continuous = env.is_continuous

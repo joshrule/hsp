@@ -1,0 +1,65 @@
+Version: "0.1"
+Environment:
+  Name: Counter
+  Description: A simple counting game.
+  Player:
+    Observer:
+      RotateWithAvatar: False
+      TrackAvatar: False
+      Height: 1
+      Width: 1
+    AvatarObject: avatar
+  Observers:
+    Vector:
+      IncludeVariables: true
+  Termination:
+    Lose:
+      - Conditions:
+          - eq: [avatar:count, 0]
+  Levels:
+    - |
+      A
+
+Actions:
+  - Name: count
+    InputMapping:
+      Inputs:
+        1:
+          Name: decrement
+          MetaData:
+            change: -1
+        2:
+          Name: increment
+          MetaData:
+            change: 1
+    Behaviours:
+      - Src:
+          Object: avatar
+          Commands:
+            - eq:
+                Arguments: [ balance, 100 ]
+                Commands:
+                  - reward: 1
+            - add: [ balance, meta.change ]
+            - eq:
+                Arguments: [ balance, 0 ]
+                Commands:
+                  - remove: _src
+            - eq:
+                Arguments: [ balance, 200 ]
+                Commands:
+                  - remove: _src
+        Dst:
+          Object: avatar
+
+Objects:
+  - Name: avatar
+    MapCharacter: A
+    Variables:
+      - Name: balance
+        InitialValue: 100
+    Observers:
+      Block2D:
+        - Shape: triangle
+          Color: [1.0, 0.0, 0.0]
+          Scale: 3.0

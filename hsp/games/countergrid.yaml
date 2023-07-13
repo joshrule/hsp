@@ -1,0 +1,133 @@
+Version: "0.1"
+Environment:
+  Name: CounterGrid
+  Description: A simple counting game inside a simple grid game.
+  Player:
+    Observer:
+      RotateWithAvatar: False
+      TrackAvatar: False
+      Height: 7
+      Width: 7
+    AvatarObject: avatar
+  Observers:
+    Vector:
+      IncludeVariables: true
+  Termination:
+    Lose:
+      - Conditions:
+          - eq: [avatar:count, 0]
+  Levels:
+    - |
+      A . . . . . .
+      . . . . . . .
+      . . . . . . .
+      . . . . . . .
+      . . . . . . .
+      . . . . . . .
+      . . . . . . .
+
+Actions:
+  - Name: move
+    InputMapping:
+      Inputs:
+        1:
+          Name: increment
+          MetaData:
+            change: 1
+        2:
+          Name: decrement
+          MetaData:
+            change: -1
+        3:
+          Name: up
+          OrientationVector: [ 0, -1 ]
+          VectorToDest: [ 0, -1 ]
+          MetaData:
+            change: -1
+        4:
+          Name: right
+          OrientationVector: [ 1, 0 ]
+          VectorToDest: [ 1, 0 ]
+          MetaData:
+            change: -1
+        5:
+          Name: down
+          OrientationVector: [ 0, 1 ]
+          VectorToDest: [ 0, 1 ]
+          MetaData:
+            change: -1
+        6:
+          Name: left
+          OrientationVector: [ -1, 0 ]
+          VectorToDest: [ -1, 0 ]
+          MetaData:
+            change: -1
+    Behaviours:
+      - Src:
+          Object: avatar
+          Commands:
+            - eq:
+                Arguments: [ balance, 100 ]
+                Commands:
+                  - reward: 1
+            - add: [ balance, meta.change ]
+            - eq:
+                Arguments: [ balance, 0 ]
+                Commands:
+                  - remove: _src
+            - eq:
+                Arguments: [ balance, 200 ]
+                Commands:
+                  - remove: _src
+        Dst:
+          Object: avatar
+      - Src:
+          Object: avatar
+          Commands:
+            - eq:
+                Arguments: [ balance, 100 ]
+                Commands:
+                  - reward: 1
+            - add: [ balance, meta.change ]
+            - eq:
+                Arguments: [ balance, 0 ]
+                Commands:
+                  - remove: _src
+            - eq:
+                Arguments: [ balance, 200 ]
+                Commands:
+                  - remove: _src
+            - mov: _dest
+        Dst:
+          Object: _empty
+      - Src:
+          Object: avatar
+          Commands:
+            - eq:
+                Arguments: [ balance, 100 ]
+                Commands:
+                  - reward: 1
+            - add: [ balance, meta.change ]
+            - eq:
+                Arguments: [ balance, 0 ]
+                Commands:
+                  - remove: _src
+            - eq:
+                Arguments: [ balance, 200 ]
+                Commands:
+                  - remove: _src
+        Dst:
+          Object: _boundary
+
+
+Objects:
+  - Name: avatar
+    MapCharacter: A
+    Variables:
+      - Name: balance
+        InitialValue: 100
+    Observers:
+      Block2D:
+        - Shape: triangle
+          Color: [1.0, 0.0, 0.0]
+          Scale: 1.0

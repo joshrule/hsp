@@ -55,6 +55,7 @@ class PlayWrapper(EnvWrapper):
 
         # NOTE: Don't reward play naively, or agent learns to turn play on and off for reward.
         if action == self.args.no_op:
+            print(f"            toggling play to {not self.playing} because action == {action}")
             self.playing = not self.playing
             self.stat['play_actions'] += 1
             self.env.toggle_self_play(self.playing)
@@ -66,6 +67,4 @@ class PlayWrapper(EnvWrapper):
         return obs, reward, term, trunc, info
 
     def render(self):
-        obs = self.env.get_state()
-        self.display_obs.append(obs)
         self.env.render()

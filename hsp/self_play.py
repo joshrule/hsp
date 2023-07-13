@@ -61,7 +61,7 @@ class Buffer:
         self.misc_buf.append(misc)
         self.ptr += 1
 
-    def finish_path(self, env, last_val=0, last_val_a = 0):
+    def finish_path(self, env):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -70,7 +70,7 @@ class Buffer:
         as well as compute the rewards-to-go for each state, to use as
         the targets for the value function.
 
-        The "last_val" argument should be 0 if the trajectory ended
+        The "last_val" calculuation should be 0 if the trajectory ended
         because the agent reached a terminal state (died), and otherwise
         should be V(s_T), the value function estimated for the last state.
         This allows us to bootstrap the reward-to-go calculation to account
@@ -80,64 +80,82 @@ class Buffer:
         path_slice = slice(self.path_start_idx, self.ptr)
         miscs = self.misc_buf[path_slice]
 
-        # Identify t_switch
-        t_switch = -1
-        idx_switch = -1
+        # for each segment, identify indices, mind, and play status
+        cur_start = 0
+        cur_mind = miscs[0].get('mind')
+        cur_play = miscs[0].get('self-play')
+        segments = []
         for t, misc in enumerate(miscs):
-            if misc.get('sp_switched'):
-                t_switch = t
-                idx_switch = self.path_start_idx + t
-                break
+            if cur_mind != misc.get('mind') or cur_play != misc.get('self-play'):
+                segments.append((self.path_start_idx + cur_start, self.path_start_idx + t, t - cur_start, cur_mind, cur_play))
+                cur_start = t
+                cur_mind = misc.get('mind')
+                cur_play = misc.get('self-play')
+        segments.append((self.path_start_idx + cur_start, self.path_start_idx + t, t - cur_start, cur_mind, cur_play))
+        # print(segments)
 
-        if t_switch > -1:
-            alice_slice = slice(self.path_start_idx, idx_switch+1)
-            bob_slice = slice(idx_switch+1, self.ptr)
-
-            # Add the last value for GAE estimation.
-            rews_a = np.append(self.rew_buf[alice_slice], last_val_a)
-            rews_b = np.append(self.rew_buf[bob_slice], last_val)
-            vals_a = np.append(self.val_buf[alice_slice], last_val_a)
-            vals_b = np.append(self.val_buf[bob_slice], last_val)
-
-            # Update rewards based on results of self-play.
-            term = any(misc.get('term') for misc in miscs)
-            if env.self_play and term:
-                rews_a[t_switch] += env.reward_terminal_mind(1)
-                self.misc_buf[idx_switch]['reward'] += env.reward_terminal_mind(1)
-            if t_switch > -1 and term and len(rews_b) > 1:
-                rews_b[-2] += env.reward_terminal_mind(2)
-                self.misc_buf[self.ptr-1]['reward'] += env.reward_terminal_mind(2)
-
-            # Compute the GAE-Lambda advantage.
-            deltas_a = rews_a[:-1] + self.args.gamma_r * vals_a[1:] - vals_a[:-1]
-            deltas_b = rews_b[:-1] + self.args.gamma_r * vals_b[1:] - vals_b[:-1]
-            self.adv_buf[alice_slice] = discount_cumsum(deltas_a, self.args.gamma_r * self.args.gamma_a)
-            self.adv_buf[bob_slice] = discount_cumsum(deltas_b, self.args.gamma_r * self.args.gamma_a)
-
-            # Compute rewards-to-go as targets for the value function.
-            self.ret_buf[alice_slice] = discount_cumsum(rews_a, self.args.gamma_r)[:-1]
-            self.ret_buf[bob_slice] = discount_cumsum(rews_b, self.args.gamma_r)[:-1]
-
-        else:
-            # Add the last value for GAE estimation.
-            rews = np.append(self.rew_buf[path_slice], last_val)
-            vals = np.append(self.val_buf[path_slice], last_val)
-
-            # Update rewards based on results of self-play.
-            term = any(misc.get('term') for misc in miscs)
-            if env.self_play and term:
-                rews[t_switch] += env.reward_terminal_mind(1)
-                self.misc_buf[idx_switch]['reward'] += env.reward_terminal_mind(1)
-            if t_switch > -1 and term:
-                rews[-2] += env.reward_terminal_mind(2)
-                self.misc_buf[self.ptr-1]['reward'] += env.reward_terminal_mind(2)
-
-            # Compute the GAE-Lambda advantage.
-            deltas = rews[:-1] + self.args.gamma_r * vals[1:] - vals[:-1]
-            self.adv_buf[path_slice] = discount_cumsum(deltas, self.args.gamma_r * self.args.gamma_a)
-
-            # Compute rewards-to-go as targets for the value function.
-            self.ret_buf[path_slice] = discount_cumsum(rews, self.args.gamma_r)[:-1]
+        # then, for each segment, compute the various values as needed
+        for sidx, s in enumerate(segments):
+            idxs = slice(s[0], s[1])
+            # Alice outside self-play
+            if s[3] == 1 and not s[4]:
+                raise ValueError("Alice occurring outside of self-play")
+            # Alice inside self-play
+            elif s[3] == 1 and s[4]:
+                # Add the last value for GAE estimation.
+                last_val = 0 if self.misc_buf[s[1]-1].get('success') else self.misc_buf[s[1]-1]['val_next']
+                rews = np.append(self.rew_buf[idxs], last_val)
+                vals = np.append(self.val_buf[idxs], last_val)
+                # Update rewards based on results of self-play.
+                # print("Alice inside self-play")
+                # print(f"{sidx+1} ? {len(segments)}")
+                if sidx+1 < len(segments):
+                    ns = segments[sidx+1]
+                    # print(f"{ns}")
+                    # print(f"{ns[3]} {ns[4]} {ns[1]-1}\n{self.misc_buf[ns[1]-1]}")
+                    if ns[3] == 2 and ns[4] and self.misc_buf[ns[1]-1].get('success') == False and self.misc_buf[ns[1]-1].get('trunc') == False:
+                        # print(f"{env.reward_terminal_mind(1, True, 2, False)}")
+                        rews[-2] += env.reward_terminal_mind(1, True, 2, False)
+                        self.misc_buf[s[1]-1]['reward'] += env.reward_terminal_mind(1, True, 2, False)
+                # Compute the GAE-Lambda advantage.
+                deltas = rews[:-1] + self.args.gamma_r * vals[1:] - vals[:-1]
+                self.adv_buf[idxs] = discount_cumsum(deltas, self.args.gamma_r * self.args.gamma_a)
+                # Compute rewards-to-go as targets for the value function.
+                self.ret_buf[idxs] = discount_cumsum(rews, self.args.gamma_r)[:-1]
+            # Bob outside self-play
+            elif s[3] == 2 and not s[4]:
+                # print("Bob outside self-play")
+                # Add the last value for GAE estimation.
+                last_val = 0 if self.misc_buf[s[1]-1].get('sp_switched') else self.misc_buf[s[1]-1]['val_next']
+                rews = np.append(self.rew_buf[idxs], last_val)
+                vals = np.append(self.val_buf[idxs], last_val)
+                # Compute the GAE-Lambda advantage.
+                deltas = rews[:-1] + self.args.gamma_r * vals[1:] - vals[:-1]
+                self.adv_buf[idxs] = discount_cumsum(deltas, self.args.gamma_r * self.args.gamma_a)
+                # Compute rewards-to-go as targets for the value function.
+                self.ret_buf[idxs] = discount_cumsum(rews, self.args.gamma_r)[:-1]
+            # Bob inside self-play
+            elif s[3] == 2 and s[4]:
+                # print("Bob inside self-play")
+                # Add the last value for GAE estimation.
+                last_val = 0 if self.misc_buf[s[1]-1].get('success') else self.misc_buf[s[1]-1]['val_next']
+                rews = np.append(self.rew_buf[idxs], last_val)
+                vals = np.append(self.val_buf[idxs], last_val)
+                # Update rewards based on results of self-play.
+                if sidx > 0:
+                    ps = segments[sidx-1]
+                    # print(f"{ps}")
+                    # print(f"{ps[3]} {ps[4]} {s[1]-1}")
+                    # print(f"{self.misc_buf[s[1]-1]}")
+                    if ps[3] == 1 and ps[4] and self.misc_buf[s[1]-1].get('success') == True:
+                        # print(f"{env.reward_terminal_mind(1, True, 2, False)}")
+                        rews[-2] += env.reward_terminal_mind(2, True, 2, True)
+                        self.misc_buf[s[1]-1]['reward'] += env.reward_terminal_mind(2, True, 2, True)
+                # Compute the GAE-Lambda advantage.
+                deltas = rews[:-1] + self.args.gamma_r * vals[1:] - vals[:-1]
+                self.adv_buf[idxs] = discount_cumsum(deltas, self.args.gamma_r * self.args.gamma_a)
+                # Compute rewards-to-go as targets for the value function.
+                self.ret_buf[idxs] = discount_cumsum(rews, self.args.gamma_r)[:-1]
 
         self.path_start_idx = self.ptr
 
@@ -323,7 +341,7 @@ class SelfPlayPPO(object):
         self.display = False
 
     def serialize_step(self, record):
-        return f'            Time: {record["t"]}, Reward: {record["reward"]}, Value: {record["value"]}, Action: {record["action"]}, Mind: {record["mind"]}'
+        return f'            Time: {record["t"]}, Reward: {record["reward"]}, Value: {record["value"]:.04f}, Diff: {record["diff"]}, Action: {record["action"]}, Mind: {record["mind"]}, Term: {record["term"]}, Trunc: {record["trunc"]}'
 
     def serialize_episode(self, record):
         total_t = record['steps'][-1]['t']
@@ -332,15 +350,23 @@ class SelfPlayPPO(object):
         bob_r = self.env.stat['reward_bob']
         test_r = self.env.stat['reward_test']
         if self.env.self_play:
-            ser = f"        Time: {total_t}, Alice Reward: {alice_r}, Bob Reward: {bob_r} Total Reward: {total_r}"
+            actions_a = [s['action'] for s in record['steps'] if s['mind'] == 1]
+            actions_b = [s['action'] for s in record['steps'] if s['mind'] == 2]
+            try:
+                min_diff = min(s['diff'] for s in record['steps'] if s['diff'] is not None)
+            except ValueError:
+                min_diff = None
+            ser = f"        Time: {total_t} Alice Reward: {alice_r} Bob Reward: {bob_r} Total Reward: {total_r} Best Diff: {min_diff}/{self.env.sp_state_thresh} Actions: {actions_a} {actions_b}"
         else:
-            ser = f"        Time: {total_t}, Test Reward: {test_r} Total Reward: {total_r}"
+            actions = [s['action'] for s in record['steps']]
+            ser = f"        Time: {total_t} Test Reward: {test_r} Total Reward: {total_r} Actions: {actions}"
         return ser
 
     def run_episode(self, max_episode_steps):
         record = {'steps': []}
 
-        obs = self.env.reset(max_episode_steps = max_episode_steps, self_play = True)
+        target = True if self.args.mode == 'self-play' else False
+        obs = self.env.reset(max_episode_steps = max_episode_steps, self_play = target)
 
         if self.display:
             self.env.render()
@@ -352,12 +378,13 @@ class SelfPlayPPO(object):
                 'obs': obs,
                 'action': action.item(),
                 'obs_new': step_obs,
-                't': len(record['steps']),
+                't': self.env.current_time,
                 'term': term,
                 'trunc': trunc,
                 'done': term or trunc,
                 'reward': step_reward.item(),
                 'value': v.item(),
+                'val_next': self.ac.step(step_obs.double())[1]
             })
             self.buffer.store(obs, action, step_reward, v, logp, step)
             record['steps'].append(step)
@@ -371,18 +398,16 @@ class SelfPlayPPO(object):
             obs = step_obs
 
             if step['done']:
-                # if trajectory didn't reach terminal state, bootstrap value target
-                v = 0 if term else self.ac.step(obs.double())[1]
-                self.buffer.finish_path(self.env, v)
+                self.buffer.finish_path(self.env)
                 record['reward'] = sum(s['reward'] for s in record['steps'])
                 record['length'] = len(record['steps'])
                 break
 
+        try:
+            record['env'] = self.env.get_stat()
+        except:
+            record['env'] = {}
         if self.args.verbose > 2:
-            try:
-                record['env'] = self.env.get_stat()
-            except:
-                record['env'] = {}
             print(self.serialize_episode(record))
 
         return record
@@ -416,7 +441,7 @@ class SelfPlayPPO(object):
             loss_a, record_a = self.compute_loss_a(data)
             record['actor_loss'].append(record_a)
             if record['actor_loss'][-1]['kl'] > 1.5 * self.args.target_kl:
-                if self.args.verbose > 2:
+                if self.args.verbose > 3:
                     print(f'# Early stopping at step {i} due to reaching max kl.')
                 break
             loss_a.backward()
@@ -479,9 +504,10 @@ class SelfPlayWrapper(EnvWrapper):
         self.total_steps = 0
         self.total_test_steps = 0
         self.success = None
-        self.sp_state_thresh = 5 * self.args.sp_state_thresh_0
+        self.sp_state_thresh = 5 * self.args.sp_state_thresh
         self.alice_limit = 1
-        self.done = False
+        self.current_mind = None
+        self.current_mind_time = 0
 
     @property
     def observation_dim(self):
@@ -530,39 +556,39 @@ class SelfPlayWrapper(EnvWrapper):
         return obs
 
     def render(self):
-        obs = self.env.get_state()
-        self.display_obs.append(obs)
         self.env.render()
 
-    def reset(self, self_play=True, **kwargs):
-        self.stat = dict()
-        self.stat['reward_test'] = 0
-        self.stat['reward_alice'] = 0
-        self.stat['reward_bob'] = 0
-        self.stat['num_steps_test'] = 0
-        self.stat['num_steps_alice'] = 0
-        self.stat['num_steps_bob'] = 0
-        self.stat['num_episodes_test'] = 0
-        self.stat['num_episodes_alice'] = 0
-        self.stat['num_episodes_bob'] = 0
-        self.env.reset(**kwargs)
-        self.current_time = 0
-        self.done = False
+    def reset(self, self_play=True, soft=False, **kwargs):
+        if not soft:
+            self.stat = dict()
+            self.stat['reward_test'] = 0
+            self.stat['reward_alice'] = 0
+            self.stat['reward_bob'] = 0
+            self.stat['num_steps_test'] = 0
+            self.stat['num_steps_alice'] = 0
+            self.stat['num_steps_bob'] = 0
+            self.stat['num_episodes_test'] = 0
+            self.stat['num_episodes_alice'] = 0
+            self.stat['num_episodes_bob'] = 0
+            self.env.reset(**kwargs)
+            self.current_time = 0
         f = self.args.sp_state_thresh_factor
-        self.sp_state_thresh *= f if self.success else 1/f
-        if self.sp_state_thresh <= self.args.sp_state_thresh_1 and self.alice_limit < self.args.sp_steps:
-            print(f"\t\tincreasing alice_limit to {self.alice_limit} and resetting state_thresh from {self.sp_state_thresh:.4} to {(self.alice_limit + 1) * self.args.sp_state_thresh_0}")
+        if self.current_mind == 2:
+            self.sp_state_thresh *= f if self.success else 1/f
+        if self.sp_state_thresh <= self.args.sp_state_thresh:
             self.alice_limit += 1
-            self.sp_state_thresh = self.alice_limit * self.args.sp_state_thresh_0
+            print(f"\t\tincreasing alice_limit to {self.alice_limit} and resetting state_thresh from {self.sp_state_thresh:.4} to {2*self.args.sp_state_thresh}")
+            self.sp_state_thresh = 4*self.args.sp_state_thresh
+        elif self.sp_state_thresh >= 7 * self.args.sp_state_thresh:
+            self.alice_limit -= 1
+            print(f"\t\tdecreasing alice_limit to {self.alice_limit} and resetting state_thresh from {self.sp_state_thresh:.4} to {2*self.args.sp_state_thresh}")
+            self.sp_state_thresh = 4*self.args.sp_state_thresh
         self.stat['best_diff_value'] = np.inf
         self.stat['best_diff_step'] = np.inf
         self.alice_last_state = None
         self.initial_state = self.env.get_state() # bypass wrapper
         self.current_mind_time = 0
         self.success = False
-        self.display_obs = []
-        self.target_obs_curr = []
-        self.target_reached_curr = 0
         self.self_play = self_play
         if self.self_play:
             self.target_obs = self.env.get_state()
@@ -581,19 +607,22 @@ class SelfPlayWrapper(EnvWrapper):
         Call only if self has been reset at least once.
         '''
         if target == self.self_play:
+            print(f"            self-play is already {target} ({self.current_time+1})")
             return
         self.self_play = not self.self_play if target is None else target
         self.initial_state = self.env.get_state()
         self.alice_last_state = None
         self.success = False
+        self.stat['best_diff_value'] = np.inf
+        self.stat['best_diff_step'] = np.inf
         if self.self_play:
-            print(f"turning on self-play ({self.current_time})")
+            print(f"            turning on self-play ({self.current_time+1})")
             self.target_obs = self.initial_state
             self.current_mind = 1
             # Alice is only on during self-play, so mind_time resets.
             self.current_mind_time = 0
         else:
-            print(f"turning off self-play ({self.current_time})")
+            print(f"            turning off self-play ({self.current_time+1})")
             self.target_obs = tr.zeros((1, self.env.observation_dim))
             if self.current_mind == 1:
                 self.current_mind_time = 0
@@ -605,6 +634,8 @@ class SelfPlayWrapper(EnvWrapper):
         self.current_mind_time += 1
 
         obs_internal, reward, term, trunc, info = self.env.step(action)
+        info['mind'] = self.current_mind
+        info['self-play'] = self.self_play
 
         self.total_steps += 1
 
@@ -617,12 +648,10 @@ class SelfPlayWrapper(EnvWrapper):
             diff = self._get_bob_diff(obs_internal, self.target_obs)
             self.success = diff < self.sp_state_thresh
             # term |= diff < self.success
-            info['diff'] = diff
+            info['diff'] = diff.item()
             if term or trunc:
-                self.done = True
                 self.stat['num_episodes_test'] += 1
             info['mask'] = 0 if (term or trunc) else 1
-            info['mind'] = self.current_mind
             return self.get_state(), reward, term, trunc, info
             # NOTE: a hacky reward structure for testing Bob
             # return self.get_state(), 1.0 * self.success, term, trunc, info
@@ -632,45 +661,49 @@ class SelfPlayWrapper(EnvWrapper):
         if self.current_mind == 1:
             self.stat['num_steps_alice'] += 1
             info['diff'] = None
-            if self.current_mind_time >= self.alice_limit:
+            if self.current_mind_time >= self.alice_limit and not (term or trunc):
                 info['sp_final_obs'] = self.get_state(adder = 1)
                 self._switch_mind()
                 if self.args.verbose > 3:
-                    print(f'        switched to mind {self.current_mind} at t={self.current_time}')
+                    print(f'            switched to mind {self.current_mind} at t={self.current_time}')
                 info['sp_switched'] = True
         # Bob
         else:
             self.stat['num_steps_bob'] += 1
             self.bob_last_state = self.env.get_state()
             diff = self._get_bob_diff(obs_internal, self.target_obs)
-            info['diff'] = diff
+            info['diff'] = diff.item()
             if diff < self.stat['best_diff_value']:
                 self.stat['best_diff_value'] = diff
                 self.stat['best_diff_step'] = self.current_mind_time
-            print(f"                diff {diff}, sp_state_thresh {self.sp_state_thresh}")
+            if self.args.verbose > 4:
+                print(f"                diff {diff}, sp_state_thresh {self.sp_state_thresh}")
             if bool(diff <= self.sp_state_thresh):
                 self.success = True
-                term = True
-                print(f"            SUCCESS: best diff: {self.stat['best_diff_value']} vs {self.sp_state_thresh}, step {self.stat['best_diff_step']}")
+                info['success'] = True
+                if self.args.mode == "self-play":
+                    term = True
+                if self.args.verbose > 3:
+                    print(f"            SUCCESS: best diff: {self.stat['best_diff_value']} vs {self.sp_state_thresh}, step {self.stat['best_diff_step']}")
 
         if self.success or term:
-            self.stat['reward_alice'] += self.reward_terminal_mind(1)
+            self.stat['reward_alice'] += self.reward_terminal_mind(1, self.self_play, self.current_mind, self.success)
             self.stat['num_episodes_alice'] += 1
-            self.stat['reward_bob'] += self.reward_terminal_mind(2)
+            self.stat['reward_bob'] += self.reward_terminal_mind(2, self.self_play, self.current_mind, self.success)
             self.stat['num_episodes_bob'] += 1
 
-        # Success
-        if self.success and not (term or trunc):
-            self.reset()
+        # Play Success
+        if self.success and not (term or trunc) and self.self_play:
+            print("HERE I AM.")
+            self.reset(self_play = True, soft = True)
 
         # Failure
-        if not self.success and (term or trunc):
+        if not self.success and (term or trunc) and self.args.verbose > 3:
             print(f"            FAILED: best diff: {self.stat['best_diff_value']} vs {self.sp_state_thresh}, step {self.stat['best_diff_step']}")
 
-        self.done |= term | trunc
         obs = self.get_state()
         info['mask'] = 0 if info.get('sp_switched') else 0 if (term or trunc) else 1
-        info['mind'] = self.current_mind
+        self.stat['reward_test'] += reward.item() * self.args.sp_reward_coef
         return obs, self.args.sp_reward_coef * reward, term, trunc, info
 
     def _get_bob_diff(self, obs, target):
@@ -696,11 +729,11 @@ class SelfPlayWrapper(EnvWrapper):
         else:
             raise RuntimeError("Invalid sp_mode")
 
-    def reward_terminal_mind(self, mind):
-        if not self.self_play:
+    def reward_terminal_mind(self, mind, self_play, current_mind, success):
+        if not self_play:
             return 0
         if mind == 1:
-            if self.current_mind == 2:
-                return 1 - self.success
+            if current_mind == 2:
+                return 1 - success
             return 0
-        return 1 * self.success
+        return 1 * success

@@ -94,7 +94,7 @@ class PPO(object):
         self.args = args
         self.env = env
         self.ac = MLPActorCritic(env.observation_space, env.action_space, **ac_kwargs)
-        print(f'Number of parameters: a: {count_vars(self.ac.pi)}, c: {count_vars(self.ac.v)}')
+        print(f'#    Number of parameters: a: {count_vars(self.ac.pi)}, c: {count_vars(self.ac.v)}')
         self.buffer = Buffer(obs_dim, act_dim, args.num_steps, args.gamma_r, args.gamma_a)
         self.optimizer_a = optim.Adam(self.ac.pi.parameters(), lr=args.pi_lrate)
         self.optimizer_c = optim.Adam(self.ac.v.parameters(), lr=args.v_lrate)
@@ -106,7 +106,8 @@ class PPO(object):
     def serialize_episode(self, record):
         total_t = record['steps'][-1]['t']
         total_r = sum(s["reward"] for s in record['steps'])
-        return f'        Time: {total_t}, Reward: {total_r:.4f}'
+        actions = [s['action'] for s in record['steps']]
+        return f'        Time: {total_t}, Reward: {total_r:.4f} Actions: {actions}'
 
     def run_episode(self, max_episode_steps):
         record = {'steps': []}
@@ -117,7 +118,7 @@ class PPO(object):
             self.env.render()
 
         while True:
-            action, v, logp = self.ac.step(tr.as_tensor(obs, dtype=tr.float64))
+            action, v, logp = self.ac.step(tr.as_tensor(tr.flatten(obs), dtype=tr.float64))
             step_obs, step_reward, term, trunc, step = self.env.step(action.item())
             step.update({
                 'obs': obs,
@@ -127,6 +128,7 @@ class PPO(object):
                 'term': term,
                 'trunc': trunc,
                 'done': term or trunc,
+                'value': v,
                 'reward': step_reward.item(),
             })
             self.buffer.store(obs, action, step_reward, v, logp)
@@ -142,17 +144,17 @@ class PPO(object):
 
             if step['done']:
                 # if trajectory didn't reach terminal state, bootstrap value target
-                v = 0 if term else self.ac.step(tr.as_tensor(obs, dtype=tr.float64))[1]
+                v = 0 if term else self.ac.step(tr.flatten(tr.as_tensor(obs, dtype=tr.float64)))[1]
                 self.buffer.finish_path(v)
                 record['reward'] = sum(s['reward'] for s in record['steps'])
                 record['length'] = len(record['steps'])
                 break
 
+        try:
+            record['env'] = self.env.get_stat()
+        except:
+            record['env'] = {}
         if self.args.verbose > 2:
-            try:
-                record['env'] = self.env.get_stat()
-            except:
-                record['env'] = {}
             print(self.serialize_episode(record))
 
         return record
@@ -212,7 +214,8 @@ class PPO(object):
         obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
         # Loss
-        pi, logp = self.ac.pi(obs, act)
+        flat_obs = tr.flatten(obs, 1)
+        pi, logp = self.ac.pi(flat_obs, act)
         ratio = tr.exp(logp - logp_old)
         clip_adv = tr.clamp(ratio, 1-self.args.eps_clip, 1+self.args.eps_clip) * adv
         loss = -(tr.min(ratio * adv, clip_adv)).mean()
@@ -229,7 +232,8 @@ class PPO(object):
 
     def compute_loss_c(self, data):
         obs, ret = data['obs'], data['ret']
-        v = self.ac.v(obs)
+        flat_obs = tr.flatten(obs, 1)
+        v = self.ac.v(flat_obs)
         v.sub_(ret)
         v.square_()
         loss = v.mean()

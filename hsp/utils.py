@@ -13,6 +13,9 @@ import time
 
 LogField = namedtuple('LogField', ('data', 'plot', 'x_axis', 'divide_by'))
 
+def empty_mean(xs):
+    return np.NAN if len(xs) == 0 else np.mean(xs)
+
 def merge_stat(src, dest):
     for k, v in src.items():
         if not k in dest:
@@ -119,7 +122,6 @@ def kl_criterion(mu, logvar):
     KLD = -0.5 * tr.sum(1 + logvar - mu.pow(2) - logvar.exp())
     KLD /= bs
 
-    print(mu.mean().data[0], logvar.mean().data[0])
     return KLD
 
 

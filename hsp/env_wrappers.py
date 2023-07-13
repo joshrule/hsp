@@ -3,14 +3,16 @@ import time
 import numpy as np
 import torch
 import gym
-import pygame
 from gym.spaces.utils import flatdim
 from gym.envs.classic_control import CartPoleEnv
 from gym.wrappers import TimeLimit
 from utils import merge_stat
 
 def torchify(x):
-    return torch.from_numpy(x).view(1, -1)
+    if len(x.shape) > 2:
+        return torch.from_numpy(x)
+    else:
+        return torch.from_numpy(x).view(1, -1)
 
 class EnvWrapper(gym.Wrapper):
     def __init__(self, env, **kwargs):
@@ -79,6 +81,49 @@ class ResetableTimeLimit(TimeLimit):
             self._max_episode_steps = max_episode_steps
         return env
 
+class RemoveNoOp(gym.ActionWrapper):
+    def __init__(self, env, **kwargs):
+        """Initializes :param: `env` with :param:`**kwargs` and shrinks the action_space.
+        Args:
+            env: The environment being initialized
+            **kwargs: The kwargs to initialize the environment with
+        Returns:
+            The wrapped environment
+        """
+        super().__init__(env, **kwargs)
+        if type(env.action_space) == gym.spaces.Discrete:
+            self.action_space = gym.spaces.Discrete(env.action_space.n-1)
+        else:
+            raise NotImplementedError
+
+    def action(self, action):
+        return action + 1
+
+class Flatten(gym.ObservationWrapper):
+    def __init__(self, env, low=-np.inf, high=np.inf, dtype=np.float32, **kwargs):
+        super().__init__(env, **kwargs)
+        if type(env.observation_space) == gym.spaces.Box:
+            flatdim = np.prod(env.observation_space.shape)
+            self.observation_space = gym.spaces.Box(shape=(flatdim,), low=low, high=high, dtype=dtype)
+        else:
+            raise NotImplementedError
+
+    def observation(self, obs):
+        return torch.flatten(obs)
+
+class Rescale(gym.ObservationWrapper):
+    def __init__(self, env, factor=1, **kwargs):
+        super().__init__(env, **kwargs)
+        env_space = env.observation_space
+        self.factor = factor
+        if type(env_space) == gym.spaces.Box:
+            self.observation_space = gym.spaces.Box(shape=env_space.shape, low=env_space.low, high=env_space.high*factor, dtype=env_space.dtype)
+        else:
+            raise NotImplementedError
+
+    def observation(self, obs):
+        return torch.mul(obs, self.factor)
+
 class GymWrapper(EnvWrapper):
     '''
     This wrapper assumes discrete actions.
@@ -123,6 +168,18 @@ class GymWrapper(EnvWrapper):
     def step(self, action):
         self.obs, reward, term, trunc, info = self.env.step(action)
         return self.get_state(), torchify(np.array(reward)), term, trunc, info
+
+class GriddlyWrapper(GymWrapper):
+    '''
+    This wrapper assumes discrete actions.
+    '''
+    def set_state(self, state):
+        self.env.unwrapped.load_state(state.numpy()[0])
+        self.env.renderer.reset()
+        self.env.renderer.render_step()
+        self.obs = state.numpy()
+        return self.get_state()
+
 
 class NoOpCartPoleEnv(CartPoleEnv):
     def __init__(self, **kwargs):
@@ -191,170 +248,6 @@ class NoOpCartPoleEnv(CartPoleEnv):
             self.render()
         return np.array(self.state, dtype=np.float32), reward, terminated, False, {}
 
-class GridWorldEnv(gym.Env):
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
-
-    def __init__(self, render_mode=None, size=5):
-        self.size = size  # The size of the square grid
-
-        # Observations are dictionaries with the agent's and the target's location.
-        # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
-        self.observation_space = gym.spaces.Box(np.array([0, 0, -1, -1, 0, 0]), np.array([size-1, size-1, size-1, size-1, 100, 1]), shape=(6,), dtype=int)
-
-        # We have 4 actions, corresponding to "right", "up", "left", "down"
-        self.action_space = gym.spaces.Discrete(5)
-
-        """
-        The following dictionary maps abstract actions from `self.action_space` to
-        the direction we will walk in if that action is taken.
-        I.e. 0 corresponds to "right", 1 to "up" etc.
-        """
-        self._action_to_direction = {
-            0: np.array([0, 0]),
-            1: np.array([1, 0]),
-            2: np.array([0, 1]),
-            3: np.array([-1, 0]),
-            4: np.array([0, -1]),
-        }
-
-        assert render_mode is None or render_mode in self.metadata["render_modes"]
-        self.render_mode = render_mode
-
-        """
-        If human-rendering is used, `self.window` will be a reference
-        to the window that we draw to. `self.clock` will be a clock that is used
-        to ensure that the environment is rendered at the correct framerate in
-        human-mode. They will remain `None` until human-mode is used for the
-        first time.
-        """
-        self.window_size = 512  # The size of the PyGame window
-        self.window = None
-        self.clock = None
-
-    def _get_obs(self):
-        obs = np.array(list(self._agent_location)+list(self._target_location)+[self._agent_health, 1*self.food_available])
-        return obs
-
-    def _get_info(self):
-        return {}
-
-    def reset(self, seed=None, options=None, return_info=None, **kwargs):
-        # We need the following line to seed self.np_random.
-        super().reset(seed=seed, **kwargs)
-
-        # Choose the agent's location uniformly at random.
-        self._agent_location = self.np_random.integers(0, self.size, size=2, dtype=int)
-        self._target_location = self.np_random.integers(0, self.size, size=2, dtype=int)
-        while list(self._agent_location) == list(self._target_location):
-            self._target_location = self.np_random.integers(0, self.size, size=2, dtype=int)
-
-        # Initialize health to middling.
-        self._agent_health = 50
-        self.current_time = 0
-        self.food_available = True
-
-        return self._get_obs()
-
-    def step(self, action):
-        # Map the action (element of {0,1,2,3}) to the direction agent walks in.
-        direction = self._action_to_direction[action]
-        # Use `np.clip` to make sure agent doesn't leave the grid.
-        self._agent_location = np.clip(
-            self._agent_location + direction, 0, self.size - 1
-        )
-        self.current_time += 1
-        if self.current_time % 10 == 0 and not self.food_available:
-            self.food_available = True
-            self._target_location = self.np_random.integers(0, self.size, size=2, dtype=int)
-            while list(self._agent_location) == list(self._target_location):
-                self._target_location = self.np_random.integers(0, self.size, size=2, dtype=int)
-        agent_ate = list(self._agent_location) == list(self._target_location) and self.food_available
-        if agent_ate:
-            # print("            agent ate")
-            self._agent_health += min(20,100-self._agent_health)
-            self.food_available = False
-            self._target_location = np.array([-1, -1])
-        elif self._agent_health > 0:
-            self._agent_health -= 1
-
-        # An episode is done iff the agent has no health.
-        terminated = self._agent_health == 0
-        truncated = False
-        reward = -(50 - self._agent_health)/50 if self._agent_health < 50 else 0
-        observation = self._get_obs()
-        info = self._get_info()
-
-        return observation, reward, terminated, truncated, info
-
-    def render(self):
-        return self._render_frame()
-
-    def _render_frame(self):
-        if self.window is None and self.render_mode == "human":
-            pygame.init()
-            pygame.display.init()
-            self.window = pygame.display.set_mode((self.window_size, self.window_size))
-        if self.clock is None and self.render_mode == "human":
-            self.clock = pygame.time.Clock()
-
-        canvas = pygame.Surface((self.window_size, self.window_size))
-        canvas.fill((255, 255, 255))
-        pix_square_size = (
-            self.window_size / self.size
-        )  # The size of a single grid square in pixels.
-
-        # First we draw the target.
-        if self.food_available:
-            pygame.draw.circle(
-                canvas,
-                (255, 0, 0),
-                (self._target_location + 0.5) * pix_square_size,
-                pix_square_size / 3,
-            )
-        # Now we draw the agent.
-        pygame.draw.circle(
-            canvas,
-            (0, 0, 255),
-            (self._agent_location + 0.5) * pix_square_size,
-            pix_square_size / 3,
-        )
-
-        # Finally, add some gridlines.
-        for x in range(self.size + 1):
-            pygame.draw.line(
-                canvas,
-                0,
-                (0, pix_square_size * x),
-                (self.window_size, pix_square_size * x),
-                width=3,
-            )
-            pygame.draw.line(
-                canvas,
-                0,
-                (pix_square_size * x, 0),
-                (pix_square_size * x, self.window_size),
-                width=3,
-            )
-
-        if self.render_mode == "human":
-            # The following line copies our drawings from `canvas` to the visible window
-            self.window.blit(canvas, canvas.get_rect())
-            pygame.event.pump()
-            pygame.display.update()
-
-            # We need to ensure that human-rendering occurs at the predefined framerate.
-            # The following line will automatically add a delay to keep the framerate stable.
-            self.clock.tick(self.metadata["render_fps"])
-        else:  # rgb_array
-            return np.transpose(
-                np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
-            )
-
-    def close(self):
-        if self.window is not None:
-            pygame.display.quit()
-            pygame.quit()
-
 
 class EatEnv(gym.Env):
     metadata = {"render_modes": [], "render_fps": 0}
@@ -362,7 +255,9 @@ class EatEnv(gym.Env):
     def __init__(self, render_mode=None):
         # Observations are dictionaries with the agent's and the target's location.
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
-        self.observation_space = gym.spaces.Box(np.array([0.0]), np.array([1.0]), shape=(1,), dtype=float)
+        # TODO: restore me:
+        # self.observation_space = gym.spaces.Box(np.array([0.0]), np.array([1.0]), shape=(1,), dtype=float)
+        self.observation_space = gym.spaces.Box(np.array([0.0, 0.0]), np.array([200.0, 200.0]), shape=(2,), dtype=float)
         #self.observation_space = gym.spaces.Box(0, 1, shape=(3,), dtype=int)
 
         # We have 2 actions, corresponding to "eat" and "rest".
@@ -372,7 +267,9 @@ class EatEnv(gym.Env):
         self.render_mode = render_mode
 
     def _get_obs(self):
-        return np.array([float(self._energy/200)])
+        # TODO: restore me:
+        # return np.array([float(self._energy/200)])
+        return np.array([1.0, float(self._energy)])
 
     def _get_info(self):
         return {}

@@ -1,4 +1,5 @@
 from gym.spaces import Box, Discrete
+import numpy as np
 import torch as tr
 import torch.nn as nn
 from torch.distributions import Categorical
@@ -159,7 +160,7 @@ class MLPActorCritic(nn.Module):
                  hidden_sizes=(64,64), activation=nn.Tanh):
         super().__init__()
 
-        obs_dim = observation_space.shape[0]
+        obs_dim = np.prod(observation_space.shape)
 
         # policy builder depends on action space
         if isinstance(action_space, Box):

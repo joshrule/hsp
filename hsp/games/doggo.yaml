@@ -1,0 +1,149 @@
+Version: "0.1"
+Environment:
+  Name: Doggo
+  Description: A modified version of "Doggo".
+  Player:
+    Observer:
+      RotateWithAvatar: False
+      TrackAvatar: False
+      Height: 7
+      Width: 7
+    AvatarObject: doggo
+  Termination:
+    Win:
+      - eq: [stick:count, 0] # There are no sticks left.
+  Levels:
+    - |
+      W  W  W  W  W  W
+      W  A  .  .  .  W
+      W  .  .  .  .  W
+      W  .  .  .  .  W
+      W  .  .  .  g  W
+      W  W  W  W  W  W
+    - |
+      W  W  W  W  W  W  W
+      W  A  .  .  .  .  W
+      W  .  .  .  .  .  W
+      W  .  .  .  .  .  W
+      W  .  .  .  .  .  W
+      W  .  .  .  .  g  W
+      W  W  W  W  W  W  W
+    - |
+      W  W  W  W  W  W  W  W
+      W  A  .  .  .  .  .  W
+      W  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  W
+      W  .  .  .  .  .  g  W
+      W  W  W  W  W  W  W  W
+    - |
+      W  W  W  W  W  W  W  W  W  W
+      W  A  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  g  W
+      W  W  W  W  W  W  W  W  W  W
+    - |
+      W  W  W  W  W  W  W  W  W  W  W  W  W  W  W  W  W  W  W
+      W  A  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  W
+      W  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  g  W
+      W  W  W  W  W  W  W  W  W  W  W  W  W  W  W  W  W  W  W
+
+Actions:
+  # Define the move action
+  - Name: move
+    InputMapping:
+      Inputs:
+        1:
+          OrientationVector: [ 0, -1 ]
+          VectorToDest: [ 0, -1 ]
+        2:
+          OrientationVector: [ 1, 0 ]
+          VectorToDest: [ 1, 0 ]
+        3:
+          OrientationVector: [ 0, 1 ]
+          VectorToDest: [ 0, 1 ]
+        4:
+          OrientationVector: [ -1, 0 ]
+          VectorToDest: [ -1, 0 ]
+        5:
+          OrientationVector: [ 0, 0 ]
+    Behaviours:
+      # Doggo can move into empty squares, but actions cost -1.
+      - Src:
+          Object: doggo
+          Commands:
+            - mov: _dest
+            - reward: -1
+        Dst:
+          Object: _empty
+      # Doggo cannot move into walls, but actions cost -1.
+      - Src:
+          Object: doggo
+          Commands:
+            - reward: -1
+        Dst:
+          Object: wall
+      # Doggo has a no-op, but it costs -1.
+      - Src:
+          Object: doggo
+          Commands:
+            - rot: _dir
+            - reward: -1
+        Dst:
+          Object: doggo
+      # If the doggo moves into a stick object, the stick is removed, and earns a reward of 10.
+      - Src:
+          Object: doggo
+          Commands:
+            - reward: 10
+            - mov: _dest
+        Dst:
+          Object: stick
+          Commands:
+            - remove: true
+
+
+Objects:
+  - Name: wall
+    MapCharacter: W
+    Observers:
+      Block2D:
+        - Shape: square
+          Color: [0.7, 0.7, 0.7]
+          Scale: 1.0
+
+  - Name: stick
+    MapCharacter: g
+    Observers:
+      Block2D:
+        - Shape: square
+          Color: [0.0, 1.0, 0.0]
+          Scale: 0.8
+
+  - Name: doggo
+    MapCharacter: A
+    Observers:
+      Block2D:
+        - Shape: triangle
+          Color: [1.0, 0.0, 0.0]
+          Scale: 1.0
